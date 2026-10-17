@@ -1,0 +1,12 @@
+// 브라우저 전용 코드를 제외한 게임 로직(map/game/ai)을 Node 샌드박스에 로드하고 API를 돌려준다.
+const fs = require('fs'), vm = require('vm'), path = require('path');
+const EXPORTS = ['newGame', 'tickDay', 'serialize', 'deserialize', 'ownedCount', 'controlledCount', 'strength', 'declareWar', 'proposePeace',
+  'proposeAlliance', 'formAlliance', 'findPath', 'visibleSet', 'splitArmy', 'mergeArmies', 'spawnArmy', 'enterable', 'moveDays',
+  'warScore', 'atWar', 'sameFaction', 'neighborsOf', 'UNITS', 'TERRAIN', 'generateMap'];
+exports.loadGame = function () {
+  const ctx = vm.createContext({ console, Math, JSON });
+  const src = ['map', 'game', 'ai'].map(f => fs.readFileSync(path.join(__dirname, '..', 'js', f + '.js'), 'utf8')).join('\n;\n')
+    + `\n;globalThis.API = { ${EXPORTS.join(', ')} };`;
+  vm.runInContext(src, ctx, { filename: 'game-bundle.js' });
+  return ctx.API;
+};

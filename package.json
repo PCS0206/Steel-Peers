@@ -1,0 +1,13 @@
+{
+  "name": "steel-peers",
+  "version": "0.2.0",
+  "private": true,
+  "description": "싱글플레이 웹 지도 전략 게임 (Hearts of Iron 풍) — 정적 사이트",
+  "scripts": {
+    "test": "node tools/test.js",
+    "simulate": "node tools/simulate.js",
+    "build": "node tools/build.js",
+    "serve": "python3 -m http.server 8000 --directory dist"
+  },
+  "engines": { "node": ">=18" }
+}

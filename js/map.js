@@ -26,6 +26,15 @@ function makeNoise(rnd, cols, rows) {
   };
 }
 
+// 지형: move=이동 시간 배수, def=방어 보너스, tint=지도 색 보정
+const TERRAIN = {
+  plains:   { name: '평원', move: 1,   def: 1,    tint: [1.0, 1.0, 1.0],  glyph: '' },
+  forest:   { name: '숲',   move: 1.4, def: 1.15, tint: [0.8, 0.95, 0.8], glyph: '♣' },
+  hills:    { name: '구릉', move: 1.5, def: 1.25, tint: [1.05, 0.97, 0.8], glyph: '∩' },
+  mountain: { name: '산악', move: 2,   def: 1.5,  tint: [0.78, 0.78, 0.86], glyph: '▲' },
+  marsh:    { name: '늪',   move: 1.8, def: 1,    tint: [0.78, 0.92, 0.95], glyph: '≈' },
+};
+
 const SYL = ['카', '르', '벤', '도', '라', '실', '안', '모', '네', '리', '타', '베', '오', '잘', '쿠', '민', '하', '세', '론', '발'];
 
 function generateMap(seed) {
@@ -37,7 +46,7 @@ function generateMap(seed) {
     for (let k = 0, n = 2 + (rnd() < 0.4 ? 1 : 0); k < n; k++) name += SYL[Math.floor(rnd() * SYL.length)];
     provs.push({
       id: provs.length, sx: (c + 0.1 + rnd() * 0.8) * cw, sy: (r + 0.1 + rnd() * 0.8) * ch,
-      col: c, row: r, name, land: false, owner: -1, adj: [], industry: 0, shade: 0.88 + rnd() * 0.2, x: 0, y: 0,
+      col: c, row: r, name, land: false, owner: -1, controller: -1, terrain: 'plains', adj: [], industry: 0, shade: 0.88 + rnd() * 0.2, x: 0, y: 0,
     });
   }
   const at = (c, r) => provs[r * COLS + c];
@@ -98,6 +107,21 @@ function generateMap(seed) {
   const keep = new Set(bestComp);
   provs.forEach(p => { p.land = keep.has(p.id); });
 
+  // 지형: 고도 상위 = 산/구릉, 나머지는 습도로 숲/늪/평원
+  const ne = makeNoise(rnd, 6, 4), nm = makeNoise(rnd, 8, 5);
+  const landP = provs.filter(p => p.land);
+  const elev = new Map(landP.map(p => [p.id, 0.6 * ne(p.x / MAP_W, p.y / MAP_H) + 0.4 * rnd()]));
+  const moist = new Map(landP.map(p => [p.id, 0.7 * nm(p.x / MAP_W, p.y / MAP_H) + 0.3 * rnd()]));
+  const byElev = [...landP].sort((a, b) => elev.get(b.id) - elev.get(a.id));
+  const byMoist = [...landP].sort((a, b) => moist.get(b.id) - moist.get(a.id));
+  const nL = landP.length;
+  byElev.forEach((p, i) => { if (i < nL * 0.1) p.terrain = 'mountain'; else if (i < nL * 0.3) p.terrain = 'hills'; });
+  byMoist.forEach((p, i) => {
+    if (p.terrain !== 'plains') return;
+    if (i < nL * 0.28) p.terrain = 'forest';
+    else if (i < nL * 0.4 && elev.get(p.id) < 0.45) p.terrain = 'marsh';
+  });
+
   const m = { provs, idmap, bidx: Int32Array.from(bidx), bnb: Int16Array.from(bnb), canvas: null, ctx: null, img: null, buf32: null };
   if (typeof document !== 'undefined') {
     m.canvas = document.createElement('canvas');
@@ -111,20 +135,31 @@ function generateMap(seed) {
 
 const pack = (r, g, b) => (0xFF000000 | (Math.min(255, b) << 16) | (Math.min(255, g) << 8) | Math.min(255, r)) >>> 0;
 
-// 소유자 색으로 지도를 오프스크린 캔버스에 그린다
-function renderMapImage(G, hoverId, selId) {
+// 소유자 색 + 지형 보정으로 지도를 오프스크린 캔버스에 그린다.
+// vis: 시야 Set(없으면 전체 공개), 점령당한 지역은 점령국 색 줄무늬
+function renderMapImage(G, hoverId, selId, vis) {
   const m = G.map;
   if (!m.ctx) return;
   const provs = G.provs, buf = m.buf32, idmap = m.idmap;
-  const cols = new Uint32Array(provs.length);
-  for (const p of provs) {
-    if (!p.land) { cols[p.id] = pack(26, 50, 82); continue; }
-    let [r, g, b] = p.owner >= 0 ? G.countries[p.owner].color : [120, 120, 120];
+  const cols = new Uint32Array(provs.length), cols2 = new Uint32Array(provs.length), occ = new Uint8Array(provs.length);
+  const shadeColor = (rgb, p, fog) => {
+    const t = TERRAIN[p.terrain].tint;
     let k = p.shade;
     if (p.id === selId) k *= 1.4; else if (p.id === hoverId) k *= 1.2;
-    cols[p.id] = pack(r * k, g * k, b * k);
+    let r = rgb[0] * k * t[0], g = rgb[1] * k * t[1], b = rgb[2] * k * t[2];
+    if (fog) { const y = (r + g + b) / 3; r = (r * 0.4 + y * 0.2); g = (g * 0.4 + y * 0.2); b = (b * 0.4 + y * 0.2); }
+    return pack(r, g, b);
+  };
+  for (const p of provs) {
+    if (!p.land) { cols[p.id] = vis ? pack(20, 40, 66) : pack(26, 50, 82); continue; }
+    const fog = vis && !vis.has(p.id);
+    cols[p.id] = shadeColor(p.owner >= 0 ? G.countries[p.owner].color : [120, 120, 120], p, fog);
+    if (p.controller >= 0 && p.controller !== p.owner) { occ[p.id] = 1; cols2[p.id] = shadeColor(G.countries[p.controller].color, p, fog); }
   }
-  for (let i = 0; i < idmap.length; i++) buf[i] = cols[idmap[i]];
+  for (let i = 0; i < idmap.length; i++) {
+    const id = idmap[i];
+    buf[i] = occ[id] && ((((i % GW) + ((i / GW) | 0)) >> 2) & 1) ? cols2[id] : cols[id];
+  }
   for (let k = 0; k < m.bidx.length; k++) {
     const i = m.bidx[k], pa = provs[idmap[i]], pb = provs[m.bnb[k]];
     if (!pa.land && !pb.land) continue;
@@ -132,8 +167,7 @@ function renderMapImage(G, hoverId, selId) {
       if (pa.owner !== pb.owner) { buf[i] = pack(15, 15, 20); continue; }
       const c = cols[pa.id];
       buf[i] = pack((c & 255) * 0.78, ((c >> 8) & 255) * 0.78, ((c >> 16) & 255) * 0.78);
-    }
-    else buf[i] = pack(12, 28, 48);
+    } else buf[i] = pack(12, 28, 48);
   }
   m.ctx.putImageData(m.img, 0, 0);
 }
