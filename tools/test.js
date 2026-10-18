@@ -290,4 +290,107 @@ test('로그에 종류·관련 국가·증가하는 id가 붙는다', () => {
   assert.strictEqual(z.logSeq, G.logSeq);
 });
 
+// ---------- 호이4식 전선: 직접 그린 라인 / 공격 화살표 ----------
+function warSetup(extra) {
+  for (let seed = 1; seed < 30; seed++) {
+    const G = A.newGame(seed, 6);
+    G.player = 0; G.countries[0].ai = false; G.countries[0].queue = [];
+    for (const enemy of A.neighborsOf(G, 0)) {
+      const border = G.provs.filter(p => p.owner === 0 && p.adj.some(n => G.provs[n].owner === enemy));
+      const e1Chain = border.length >= 3 && border[0].adj.some(n => G.provs[n].owner === enemy && G.provs[n].adj.some(m => G.provs[m].owner === enemy && m !== n && !G.provs[m].adj.includes(border[0].id)));
+      if (!e1Chain) continue;
+      A.declareWar(G, 0, enemy);
+      for (let i = 0; i < extra; i++) A.spawnArmy(G, 0, G.countries[0].capital, 'inf');
+      return { G, enemy, border: G.provs.filter(p => p.owner === 0 && A.frontCandidate(G, 0, p.id) === enemy) };
+    }
+  }
+  throw new Error('no suitable war setup');
+}
+
+test('전선 그리기: 접경 지역만 라인이 되고, 라인 밖은 전선에 포함되지 않는다', () => {
+  const { G, enemy, border } = warSetup(0);
+  assert.ok(border.length >= 3, 'enough border provinces');
+  const pick = border.slice(0, 2).map(p => p.id);
+  const f = A.createFront(G, 0, pick[0], 'hold', pick);
+  assert.ok(f);
+  assert.strictEqual([...f.line].sort().join(), [...pick].sort().join());
+  assert.strictEqual([...f.border].sort().join(), [...pick].sort().join(), 'only the drawn provinces');
+  assert.strictEqual(f.enemy, enemy);
+  const interior = G.provs.find(p => p.owner === 0 && A.frontCandidate(G, 0, p.id) < 0);
+  assert.strictEqual(A.createFront(G, 0, interior.id, 'hold', [interior.id]), null, '접경이 아닌 지역으로는 못 그림');
+  assert.strictEqual(A.createFront(G, 0, pick[0], 'hold', [pick[0], interior.id]), null, '라인에 접경 아닌 지역이 섞이면 거부');
+});
+
+test('전선 그리기: 건너편을 점령하면 라인이 앞으로 전진하고, 잃은 지역은 빠진다', () => {
+  const { G, enemy, border } = warSetup(0);
+  const b = border[0], f = A.createFront(G, 0, b.id, 'hold', [b.id]);
+  const foes = b.adj.filter(n => G.provs[n].controller === enemy);
+  for (const n of foes) G.provs[n].controller = 0;           // 건너편을 모두 점령했다고 가정
+  A.tickDay(G);
+  const fr = G.fronts.find(x => x.id === f.id);
+  if (fr) {
+    assert.ok(!fr.line.includes(b.id), '더 이상 접경이 아닌 지역은 라인에서 빠진다');
+    assert.ok(fr.line.every(id => A.frontCandidate(G, 0, id, enemy) === enemy), 'new line provinces border the enemy');
+    assert.ok(fr.line.some(id => foes.includes(id)), 'line advanced onto captured provinces');
+  } else assert.ok(G.log.some(l => l.text.includes('접경 지역이 없어')), '전진할 곳이 없으면 해산');
+});
+
+test('전선 그리기: 적에게 라인 지역을 잃으면 라인이 뒤로 물러나 유지된다', () => {
+  const { G, enemy, border } = warSetup(0);
+  const b = border[0], f = A.createFront(G, 0, b.id, 'hold', [b.id]);
+  b.controller = enemy;                                         // 라인의 유일한 지역을 적에게 빼앗김
+  A.tickDay(G);
+  const fr = G.fronts.find(x => x.id === f.id);
+  assert.ok(fr, '전선이 해산되지 않고 유지된다');
+  assert.ok(fr.line.length >= 1 && fr.line.every(id => id !== b.id && A.frontCandidate(G, 0, id, enemy) === enemy), 'retreated to new border provinces');
+});
+
+test('공격 화살표: 검증 규칙', () => {
+  const { G, enemy, border } = warSetup(0);
+  const f = A.createFront(G, 0, border[0].id, 'attack');
+  const e1 = border[0].adj.find(n => G.provs[n].controller === enemy);
+  const e2 = G.provs[e1].adj.find(n => G.provs[n].controller === enemy && n !== e1);
+  assert.ok(A.addArrow(G, f, [e1]).ok);
+  if (e2 !== undefined) assert.ok(A.addArrow(G, f, [e1, e2]).ok);
+  assert.ok(!A.addArrow(G, f, [border[0].id]).ok, '내 지역으로는 못 그림');
+  assert.ok(!A.addArrow(G, f, []).ok);
+  const far = G.provs.find(p => p.owner === enemy && !p.adj.some(n => f.border.includes(n)));
+  assert.ok(!A.addArrow(G, f, [far.id]).ok, '전선과 맞닿지 않은 곳에서 시작 불가');
+  while (f.arrows.length < 4) f.arrows.push({ path: [e1] });
+  assert.ok(!A.addArrow(G, f, [e1]).ok, '최대 4개');
+});
+
+test('공격 화살표: 사단이 화살표 목표를 먼저 공략하고, 점령하면 화살표가 줄어든다', () => {
+  const { G, enemy, border } = warSetup(16);
+  const b = border[0], f = A.createFront(G, 0, b.id, 'attack');
+  const e1 = b.adj.find(n => G.provs[n].controller === enemy);
+  const e2 = G.provs[e1].adj.find(n => G.provs[n].controller === enemy && !G.provs[n].adj.includes(b.id) && n !== e1);
+  const path = e2 === undefined ? [e1] : [e1, e2];
+  assert.ok(A.addArrow(G, f, path).ok);
+  A.assignToFront(G, f, new Set(G.armies.filter(a => a.owner === 0).map(a => a.id)));
+  const initial = new Set(G.provs.filter(p => p.controller === enemy).map(p => p.id));
+  let stray = 0, maxPath = path.length;
+  for (let d = 0; d < 150 && f.arrows.length; d++) {
+    A.tickDay(G);
+    const arrowIds = new Set(path);
+    stray += G.provs.filter(p => initial.has(p.id) && p.controller === 0 && !arrowIds.has(p.id)).length > 0 && f.arrows.length ? 1 : 0;
+    maxPath = Math.max(maxPath, f.arrows.length ? f.arrows[0].path.length : 0);
+  }
+  assert.ok(path.every(id => G.provs[id].controller === 0), 'arrow provinces captured');
+  assert.strictEqual(stray, 0, '화살표가 남아 있는 동안 다른 적 지역은 공격하지 않는다');
+  assert.ok(G.log.some(l => l.text.includes('화살표 목표를 달성')), 'arrow completion logged');
+});
+
+test('전선: 직접 그린 라인·화살표도 저장/불러오기에서 유지된다', () => {
+  const { G, border } = warSetup(8);
+  const f = A.createFront(G, 0, border[0].id, 'attack', border.slice(0, 2).map(p => p.id));
+  const e1 = border[0].adj.find(n => G.provs[n].controller === f.enemy);
+  A.addArrow(G, f, [e1]);
+  for (let i = 0; i < 20; i++) A.tickDay(G);
+  const z = A.deserialize(JSON.parse(JSON.stringify(A.serialize(G))));
+  assert.strictEqual(JSON.stringify(z.fronts), JSON.stringify(G.fronts));
+  for (let i = 0; i < 20; i++) { A.tickDay(G); A.tickDay(z); }
+  assert.strictEqual(JSON.stringify(A.serialize(G)), JSON.stringify(A.serialize(z)));
+});
+
 console.log(`${n} tests passed`);

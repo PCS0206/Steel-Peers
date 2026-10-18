@@ -85,3 +85,12 @@ button.on-mode { background:var(--accent); color:#1a1305; }
 .dlg .btns button.primary { background:var(--accent); color:#1a1305; border-color:var(--accent); font-weight:700; }
 .dlg .btns button.danger { background:#c0392b; border-color:#c0392b; color:#fff; font-weight:700; }
 @media (max-width: 720px) { #toasts { left:50%; top:48px; } }
+
+/* 전선 그리기 바 */
+#drawbar { position:fixed; left:calc((100% - 290px) / 2); bottom:18px; transform:translateX(-50%); z-index:25; display:flex; align-items:center; gap:14px; background:#0d1620f5; border:1px solid #e0903a; border-radius:8px; padding:10px 14px; box-shadow:0 4px 18px #000b; max-width:min(720px, 94vw); }
+#drawbar.hidden { display:none; }
+#drawbar #drawtext { font-size:14px; line-height:1.45; }
+#drawbar .btns { display:flex; gap:6px; flex:none; }
+#drawbar button.primary { background:var(--accent); color:#1a1305; border-color:var(--accent); font-weight:700; }
+body.drawing canvas#map { cursor:crosshair; }
+@media (max-width: 720px) { #drawbar { left:50%; bottom:calc(40% + 10px); flex-direction:column; align-items:stretch; gap:8px; } }
