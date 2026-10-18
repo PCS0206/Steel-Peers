@@ -276,8 +276,9 @@ function updateMapStyle(G, vis) {
   if (sig === m.styleSig) return;       // 소유·점령·시야가 그대로면 다시 굽지 않는다
   m.styleSig = sig; m.cacheDirty = true;
   const style = (rgb, p, fog) => {
-    const t = TERRAIN[p.terrain].tint;
-    let r = rgb[0] * p.shade * t[0], g = rgb[1] * p.shade * t[1], b = rgb[2] * p.shade * t[2];
+    const t = TERRAIN[p.terrain].tint, k = 0.4;                 // 지형 보정은 40%만 반영해 국가색을 또렷하게 유지
+    const sh = 1 + (p.shade - 1) * 0.6;
+    let r = rgb[0] * sh * (1 + (t[0] - 1) * k), g = rgb[1] * sh * (1 + (t[1] - 1) * k), b = rgb[2] * sh * (1 + (t[2] - 1) * k);
     if (fog) { const y = (r + g + b) / 3; r = r * 0.4 + y * 0.2; g = g * 0.4 + y * 0.2; b = b * 0.4 + y * 0.2; }
     return rgbStr(r, g, b);
   };
@@ -291,10 +292,13 @@ function updateMapStyle(G, vis) {
   if (ownSig !== m.ownSig) {
     m.ownSig = ownSig; m.bProv = new Path2D(); m.bOwn = new Path2D(); m.bWar = new Path2D();
     for (const p of provs) {
+      p.bEdge = null;
       if (!p.land) continue;
       for (const e of p.edges) {
-        if (e.nb <= p.id || !provs[e.nb].land) continue;
+        if (e.nb < 0 || !provs[e.nb].land) continue;
         const q = provs[e.nb];
+        if (q.owner !== p.owner) { p.bEdge = p.bEdge || new Path2D(); pathOf(e.pts, p.bEdge); }   // 이 지역 쪽에서 본 국경 (국가색 띠용)
+        if (e.nb <= p.id) continue;                                                              // 공유 경계는 한 번만
         if (q.owner === p.owner) pathOf(e.pts, m.bProv);
         else pathOf(e.pts, p.owner >= 0 && q.owner >= 0 && atWar(G, p.owner, q.owner) ? m.bWar : m.bOwn);   // 교전 중인 국경은 빨간선
       }
@@ -341,13 +345,21 @@ function drawStatic(ctx, G, z) {
     ctx.fillStyle = m.fill[p.id]; ctx.fill(p.path);
     if (m.occ[p.id]) { ctx.fillStyle = stripePattern(ctx, m, m.occ[p.id]); ctx.fill(p.path); }
   }
-  ctx.save(); ctx.globalCompositeOperation = 'overlay'; ctx.globalAlpha = 0.5; ctx.drawImage(m.tex, 0, 0, MAP_W, MAP_H); ctx.restore();
+  ctx.save(); ctx.globalCompositeOperation = 'overlay'; ctx.globalAlpha = 0.34; ctx.drawImage(m.tex, 0, 0, MAP_W, MAP_H); ctx.restore();
   for (const p of provs) if (p.land && p.deco.length) drawDeco(ctx, p);
 
   ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-  ctx.strokeStyle = 'rgba(0,0,0,0.26)'; ctx.lineWidth = 1 / z; ctx.stroke(m.bProv);
-  ctx.strokeStyle = 'rgba(8,10,18,0.9)'; ctx.lineWidth = 3.2 / z; ctx.stroke(m.bOwn);
-  ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.lineWidth = 1 / z; ctx.stroke(m.bOwn);
+  ctx.strokeStyle = 'rgba(0,0,0,0.16)'; ctx.lineWidth = 0.8 / z; ctx.stroke(m.bProv);          // 같은 나라 안의 지역 경계는 옅게
+  ctx.strokeStyle = 'rgba(6,8,14,0.95)'; ctx.lineWidth = 4.2 / z; ctx.stroke(m.bOwn); ctx.stroke(m.bWar);   // 국경 외곽선
+  for (const p of provs) {                                                                  // 국경 안쪽에 각 나라의 고유색 띠
+    if (!p.bEdge || p.owner < 0) continue;
+    const c = G.countries[p.owner].color;
+    ctx.save(); ctx.clip(p.path);
+    ctx.strokeStyle = `rgb(${Math.min(255, c[0] * 1.15 + 20)},${Math.min(255, c[1] * 1.15 + 20)},${Math.min(255, c[2] * 1.15 + 20)})`;
+    ctx.lineWidth = 12 / z; ctx.stroke(p.bEdge);
+    ctx.restore();
+  }
+  ctx.strokeStyle = 'rgba(8,10,18,0.9)'; ctx.lineWidth = 1 / z; ctx.stroke(m.bOwn); ctx.stroke(m.bWar);   // 국경 중심선
   ctx.strokeStyle = 'rgba(40,6,6,0.95)'; ctx.lineWidth = 4.6 / z; ctx.stroke(m.bWar);
   ctx.strokeStyle = 'rgba(255,84,64,0.98)'; ctx.lineWidth = 2.4 / z; ctx.stroke(m.bWar);
   ctx.strokeStyle = 'rgba(6,22,38,0.95)'; ctx.lineWidth = 1.8 / z; ctx.stroke(m.coast);
