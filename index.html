@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Steel Peers</title>
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -19,11 +20,17 @@
   </span>
   <span id="pp"></span>
   <span id="wars"></span>
+  <span class="spacer"></span>
+  <button id="btnSave" title="저장">💾</button>
+  <button id="btnLoad" title="불러오기">📂</button>
+  <button id="btnMenu" title="메뉴">☰</button>
 </div>
 
 <aside id="panel"></aside>
 <div id="log"></div>
 <div id="banner"></div>
+<div id="toasts"></div>
+<div id="modal" class="hidden"><div class="dlg"></div></div>
 
 <div id="overlay">
   <div class="card">
@@ -32,12 +39,15 @@
     <label>시드 <input id="seed" type="number" value="1"></label>
     <label>국가 수 <select id="ncountries"><option>4</option><option>5</option><option selected>6</option><option>7</option></select></label>
     <button id="start">새 게임</button>
-    <p class="hint">좌클릭: 선택 · 우클릭: 이동 명령 · 드래그: 지도 이동 · 휠: 확대/축소 · Space: 일시정지 · 1~3: 속도</p>
+    <button id="continue" style="display:none">이어하기</button>
+    <p class="hint">좌클릭/탭: 선택 · 우클릭/길게 누르기/이동 모드: 이동 명령 · 드래그: 지도 이동 · 휠/핀치: 확대·축소 · Space: 일시정지 · 1~3: 속도</p>
   </div>
 </div>
 
 <script src="js/map.js"></script>
 <script src="js/game.js"></script>
+<script src="js/economy.js"></script>
+<script src="js/fronts.js"></script>
 <script src="js/ai.js"></script>
 <script src="js/ui.js"></script>
 </body>
