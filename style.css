@@ -135,3 +135,18 @@ label.army.sm { padding:1px 0; font-size:13px; } .gtitle { margin-top:8px; }
 }
 
 #date { flex:none; }
+
+/* 병과 아이콘 / 사단 설계 */
+.uic { display:inline-block; vertical-align:-2px; margin-right:4px; } .uic svg { width:21px; height:14px; display:block; }
+.uic.lg svg { width:26px; height:18px; }
+.brow { display:grid; grid-template-columns:30px 1fr auto; gap:8px; align-items:center; padding:5px 0; border-bottom:1px solid #22344a; }
+.brow .nm b { color:var(--accent); } .brow .st { color:var(--dim); font-size:12px; grid-column:2 / 4; margin-top:-2px; }
+.brow button { width:28px; padding:2px 0; font-weight:700; }
+#win input[type=text] { width:100%; background:#0d1620; color:var(--text); border:1px solid var(--line); border-radius:4px; padding:6px 8px; font:inherit; margin:4px 0 8px; }
+.dstat { margin:10px 0; padding:8px 10px; background:#0d1620; border:1px solid var(--line); border-radius:6px; line-height:1.7; }
+.dstat .big b { font-size:15px; color:var(--text); } .dstat .good { color:#8fd18a; } .dstat .bad { color:#ff8a7a; }
+.tcard { border:1px solid var(--line); border-radius:6px; padding:6px 8px; margin:6px 0; background:#1a2a3a; }
+.tcard .row { margin:4px 0 0; } .tcard button { padding:3px 8px; font-size:12px; }
+.chip { display:inline-block; font-size:11px; padding:0 6px; border-radius:3px; background:#2b3d52; color:var(--text); margin:1px 2px 1px 0; }
+.chip.up { background:#24472f; } .chip.down { background:#4d2a2a; }
+button.primary { background:var(--accent); color:#1a1305; border-color:var(--accent); font-weight:700; }

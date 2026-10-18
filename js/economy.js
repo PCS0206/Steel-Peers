@@ -5,6 +5,7 @@
 const EQUIP = {
   small: { name: '보병장비', out: 0.8 },   // 군수 공장 1개당 하루 생산량
   tank: { name: '전차', out: 0.35 },
+  gun: { name: '야포', out: 0.45 },
 };
 const FACTORY_COST = 100;   // 공장 1개 건설 PP
 const BUILD_RATE = 10;      // 건설 프로젝트 하나가 하루에 쓸 수 있는 최대 PP
@@ -13,7 +14,8 @@ const MAX_PROJECTS = 6;     // 건설 대기열 최대
 const BASE_PP = 1, CIV_PP = 0.6;
 const EQ_CAP = 1500, PP_CAP = 1000;
 const SLOT_BONUS = 1;       // 지역 공장 슬롯 = 산업 + 1
-const TRAIN_DAYS = { inf: 10, arm: 16, mtn: 12 };
+// 기본 사단의 훈련 일수 (설계한 사단은 UNITS[id].days)
+const TRAIN_DAYS = { get inf() { return UNITS.inf.days; }, get arm() { return UNITS.arm.days; }, get mtn() { return UNITS.mtn.days; } };
 
 // 소유·지배를 모두 가진 지역의 공장 합
 function factoriesOf(G, id) {
@@ -30,15 +32,16 @@ function initEconomy(G) {
     p.civ = p.industry - p.mil;
   }
   for (const c of G.countries) {
-    const { mil } = factoriesOf(G, c.id), small = Math.round(mil * 0.65);
-    c.alloc = { small, tank: mil - small };
+    const { mil } = factoriesOf(G, c.id), small = Math.round(mil * 0.55), tank = Math.round(mil * 0.25);
+    c.alloc = { small, tank, gun: mil - small - tank };
     c.fac = factoriesOf(G, c.id);
   }
 }
 
+const allocTotal = a => Object.values(a).reduce((s, v) => s + v, 0);
 function clampAlloc(c, mil) {
   const a = c.alloc;
-  while (a.small + a.tank > mil) { if (a.tank >= a.small && a.tank > 0) a.tank--; else a.small--; }
+  while (allocTotal(a) > mil) { const k = Object.keys(a).sort((x, y) => a[y] - a[x])[0]; if (a[k] <= 0) break; a[k]--; }
 }
 
 const queuedBuilds = (c, provId) => c.construction.filter(j => j.prov === provId).length;
@@ -64,7 +67,7 @@ function cancelBuild(G, cid, index) {
 // 군수 공장 할당 조정: eq 장비 쪽으로 delta(±1)
 function setAlloc(G, cid, eq, delta) {
   const c = G.countries[cid], { mil } = factoriesOf(G, cid), a = c.alloc;
-  if (delta > 0 && a.small + a.tank >= mil) return false;
+  if (delta > 0 && allocTotal(a) >= mil) return false;
   if (delta < 0 && a[eq] <= 0) return false;
   a[eq] += delta;
   return true;
@@ -94,12 +97,13 @@ function economy(G) {
     const fac = c.fac = factoriesOf(G, c.id);
     clampAlloc(c, fac.mil);
 
-    c.income = BASE_PP + CIV_PP * fac.civ;
+    const eco = c.ai ? diffOf(G).aiEco : 1;                                 // 난이도: AI 경제 배율
+    c.income = (BASE_PP + CIV_PP * fac.civ) * eco;
     c.pp = Math.min(PP_CAP, c.pp + c.income);
-    c.manpower = Math.min(150, c.manpower + 0.08 * controlledCount(G, c.id));
+    c.manpower = Math.min(150, c.manpower + 0.08 * controlledCount(G, c.id) * eco);
     c.eqRate = {};
     for (const k of Object.keys(EQUIP)) {
-      c.eqRate[k] = c.alloc[k] * EQUIP[k].out;
+      c.eqRate[k] = (c.alloc[k] || 0) * EQUIP[k].out * eco;
       c.equip[k] = Math.min(EQ_CAP, c.equip[k] + c.eqRate[k]);
     }
 
@@ -114,7 +118,7 @@ function economy(G) {
       if (j.progress < FACTORY_COST - 1e-6) return true;
       if (p.civ + p.mil >= p.slots) return false;
       p[j.kind]++;
-      if (j.kind === 'mil') c.alloc.small++;                          // 새 군수 공장은 보병장비에 우선 할당
+      if (j.kind === 'mil') c.alloc.small = (c.alloc.small || 0) + 1;   // 새 군수 공장은 보병장비에 우선 할당
       if (c.id === G.player) addLog(G, `${p.name}에 ${j.kind === 'civ' ? '민수' : '군수'} 공장이 완공되었다.`, c.id, 'built', [c.id]);
       G.dirty = true;
       return false;
@@ -124,7 +128,7 @@ function economy(G) {
   }
 }
 
-// 훈련: 시작할 때 장비·인력을 소모하고 TRAIN_DAYS 동안 훈련한 뒤 수도에 편성. 완료되면 같은 라인이 반복된다
+// 훈련: 시작할 때 장비·인력을 소모하고 사단 템플릿의 훈련 일수 동안 훈련한 뒤 수도에 편성. 완료되면 같은 라인이 반복된다
 function trainDivisions(G, c) {
   let active = c.queue.filter(q => q.started).length;
   for (const q of c.queue) {
@@ -138,7 +142,7 @@ function trainDivisions(G, c) {
       for (const [k, v] of Object.entries(u.eq)) c.equip[k] -= v;
       c.manpower -= u.mp;
       q.started = true; q.progress = 0; active++;
-    } else if (++q.progress >= TRAIN_DAYS[q.type]) {
+    } else if (++q.progress >= u.days) {
       const home = G.provs[c.capital].controller === c.id ? c.capital : nearestControlled(G, c.capital, c.id);
       spawnArmy(G, c.id, home, q.type);
       if (c.id === G.player) addLog(G, `새 ${u.name} 사단이 편성되었다.`, c.id, 'unit', [c.id]);

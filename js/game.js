@@ -8,14 +8,22 @@ const MAX_FACTION = 3;    // 동맹 최대 인원
 const TRUCE_DAYS = 40;
 const START_YEAR = 1936;
 const SUPPLY_RANGE = 2;   // 아군 지배 지역에서 이만큼 떨어진 곳까지 보급
-const SAVE_VERSION = 2;
+const SAVE_VERSION = 3;
 
-// 사단 종류. eq=훈련에 드는 장비, mp=인력(천 명), terr=지형별 공격·방어 보정
-const UNITS = {
-  inf: { name: '보병', eq: { small: 40 }, mp: 8, atk: 1, def: 1.1, speed: 1, terr: {} },
-  arm: { name: '기갑', eq: { tank: 25 }, mp: 6, atk: 1.9, def: 0.9, speed: 1.7, terr: { forest: 0.6, hills: 0.7, mountain: 0.4, marsh: 0.5 } },
-  mtn: { name: '산악보병', eq: { small: 40 }, mp: 8, atk: 1, def: 1.1, speed: 1, terr: { hills: 1.3, mountain: 1.5 } },
+// 난이도: AI 경제 배율(생산·장비·인력), AI가 플레이어에게 가하는 피해 배율, 플레이어를 노린 AI 선전포고 유예(일)·확률 배율, 플레이어 시작 자원 배율
+const DIFFICULTY = {
+  easy:   { name: '쉬움',      aiEco: 0.6,  aiDmg: 0.9,  warDay: 150, warProb: 0.5, pStart: 1.5 },
+  normal: { name: '보통',      aiEco: 0.85, aiDmg: 1,    warDay: 75,  warProb: 1,   pStart: 1 },
+  hard:   { name: '어려움',    aiEco: 1.05, aiDmg: 1.08, warDay: 45,  warProb: 1.4, pStart: 0.9 },
+  brutal: { name: '매우 어려움', aiEco: 1.3,  aiDmg: 1.18, warDay: 25,  warProb: 2,   pStart: 0.75 },
 };
+const diffOf = G => DIFFICULTY[G.difficulty] || DIFFICULTY.normal;
+function setDifficulty(G, level) {
+  if (!DIFFICULTY[level]) return false;
+  G.difficulty = level;
+  return true;
+}
+
 const unitMod = (type, terrain) => UNITS[type].terr[terrain] ?? 1;
 
 const COUNTRY_DEFS = [
@@ -39,17 +47,19 @@ const warKey = (a, b) => (a < b ? a + '-' + b : b + '-' + a);
 
 function emptyState(seed, map) {
   return {
-    seed, map, provs: map.provs, countries: [], armies: [], wars: {}, truces: {}, factions: [], nextFaction: 1, fronts: [], nextFront: 1,
+    seed, map, provs: map.provs, countries: [], armies: [], wars: {}, truces: {}, factions: [], nextFaction: 1, fronts: [], nextFront: 1, templates: [], nextTemplate: 1, difficulty: 'normal',
     day: 0, log: [], logSeq: 0, nextArmyId: 1, player: -1, over: null, dirty: true, landCount: 0, supply: [], vis: null,
     rnd: mulberry32(seed),
   };
 }
 
-function newGame(seed, nCountries) {
+function newGame(seed, nCountries, difficulty = 'normal') {
+  resetTemplates([]);
   const map = generateMap(seed);
   const rnd = mulberry32(seed ^ 0x9e3779b9);
   const G = emptyState(seed, map);
   G.nCountries = nCountries;
+  setDifficulty(G, difficulty);
   const land = G.provs.filter(p => p.land);
   G.landCount = land.length;
 
@@ -66,7 +76,7 @@ function newGame(seed, nCountries) {
   }
   caps.forEach((cap, i) => {
     const def = COUNTRY_DEFS[i % COUNTRY_DEFS.length];
-    G.countries.push({ id: i, name: def.name, color: def.color, capital: cap.id, pp: 100, manpower: 40, income: 0, equip: { small: 80, tank: 30 }, alloc: { small: 0, tank: 0 }, eqRate: { small: 0, tank: 0 }, fac: { civ: 0, mil: 0 }, construction: [], queue: [], alive: true, ai: true, faction: -1 });
+    G.countries.push({ id: i, name: def.name, color: def.color, capital: cap.id, pp: 100, manpower: 40, income: 0, equip: { small: 80, tank: 30, gun: 20 }, alloc: { small: 0, tank: 0, gun: 0 }, eqRate: { small: 0, tank: 0, gun: 0 }, fac: { civ: 0, mil: 0 }, construction: [], queue: [], alive: true, ai: true, faction: -1 });
     cap.owner = i;
   });
 
@@ -93,6 +103,16 @@ function newGame(seed, nCountries) {
   }
   computeSupply(G);
   return G;
+}
+
+// 플레이어 국가를 정한다. 난이도에 따라 시작 자원(PP·장비·인력)이 조정된다
+function setPlayer(G, id) {
+  G.player = id; G.countries[id].ai = false;
+  if (G.day === 0) {
+    const c = G.countries[id], f = diffOf(G).pStart;
+    c.pp = Math.round(c.pp * f); c.manpower = Math.round(c.manpower * f);
+    for (const k of Object.keys(c.equip)) c.equip[k] = Math.round(c.equip[k] * f);
+  }
 }
 
 function spawnArmy(G, owner, prov, type, amount = 1) {
@@ -132,7 +152,9 @@ const sameFaction = (G, a, b) => a !== b && a >= 0 && b >= 0 && G.countries[a].f
 const enemiesAt = (G, prov, owner) => G.armies.filter(a => a.prov === prov && atWar(G, owner, a.owner));
 const ownedCount = (G, id) => G.provs.reduce((n, p) => n + (p.owner === id ? 1 : 0), 0);
 const controlledCount = (G, id) => G.provs.reduce((n, p) => n + (p.controller === id && p.land ? 1 : 0), 0);
-const strength = (G, id) => G.armies.reduce((s, a) => s + (a.owner === id ? a.hp : 0), 0) + 0.15 * controlledCount(G, id);
+// 부대 환산 전력: 보병 사단 1개 ≈ 1.0 (설계한 사단은 공격·방어 능력치에 비례)
+const armyStr = a => { let s = 0; for (const t in a.comp) s += a.comp[t] * unitStr(t); return s; };
+const strength = (G, id) => G.armies.reduce((s, a) => s + (a.owner === id ? armyStr(a) : 0), 0) + 0.15 * controlledCount(G, id);
 const warsOf = (G, id) => G.countries.filter(c => c.alive && atWar(G, id, c.id)).map(c => c.id);
 const membersOf = (G, faction) => G.countries.filter(c => c.alive && c.faction === faction);
 // owner의 영토 중 controller가 점령한 지역 수
@@ -333,7 +355,7 @@ function moveDays(G, a, provId) {
   let days = 0;
   for (const t in a.comp) {
     if (a.comp[t] < 0.01) continue;
-    const mult = t === 'mtn' && tm > 1 ? 1 + (tm - 1) * 0.5 : tm; // 산악병은 험지 페널티 절반
+    const mult = tm > 1 ? 1 + (tm - 1) * UNITS[t].rough : tm; // 산악병 등은 험지 페널티를 덜 받는다
     days = Math.max(days, MOVE_DAYS * mult / UNITS[t].speed);
   }
   return Math.max(1, Math.ceil(days - 1e-9));
@@ -376,7 +398,8 @@ function combat(G) {
         const defender = e.owner === p.controller || sameFaction(G, e.owner, p.controller);
         if (defender) def *= 1.1 * terr.def;
         const supplyPenalty = isSupplied(G, e) ? 1 : 1.25;
-        dmg.set(e, (dmg.get(e) || 0) + base / def * supplyPenalty);
+        const diff = G.countries[o].ai && e.owner === G.player ? diffOf(G).aiDmg : 1;   // 난이도: AI가 플레이어에게 주는 피해
+        dmg.set(e, (dmg.get(e) || 0) + base / def * supplyPenalty * diff);
       }
     }
   }
@@ -394,7 +417,7 @@ function occupation(G) {
     const occ = list.filter(a => p.controller < 0 || atWar(G, a.owner, p.controller));
     if (!occ.length) continue;
     const totals = new Map();
-    for (const a of occ) totals.set(a.owner, (totals.get(a.owner) || 0) + a.hp);
+    for (const a of occ) totals.set(a.owner, (totals.get(a.owner) || 0) + armyStr(a));
     occupy(G, p, [...totals.entries()].sort((x, y) => y[1] - x[1])[0][0]);
   }
   for (const c of G.countries) if (c.alive && !G.provs.some(p => p.land && p.controller === c.id)) capitulate(G, c.id);
@@ -450,17 +473,18 @@ function checkVictory(G) {
 function serialize(G) {
   return JSON.parse(JSON.stringify({
     v: SAVE_VERSION, seed: G.seed, nCountries: G.nCountries, day: G.day, player: G.player, nextArmyId: G.nextArmyId,
-    countries: G.countries, armies: G.armies, wars: G.wars, truces: G.truces, factions: G.factions, nextFaction: G.nextFaction, fronts: G.fronts, nextFront: G.nextFront,
+    countries: G.countries, armies: G.armies, wars: G.wars, truces: G.truces, factions: G.factions, nextFaction: G.nextFaction, fronts: G.fronts, nextFront: G.nextFront, templates: G.templates, nextTemplate: G.nextTemplate, difficulty: G.difficulty,
     log: G.log.slice(-60), logSeq: G.logSeq, over: G.over, landCount: G.landCount, provs: G.provs.map(p => [p.owner, p.controller, p.industry, p.civ, p.mil]),
   }));
 }
 
 function deserialize(d) {
   if (!d || d.v !== SAVE_VERSION) throw new Error('지원하지 않는 저장 데이터');
+  resetTemplates(d.templates || []);
   const G = emptyState(d.seed, generateMap(d.seed));
   Object.assign(G, {
     nCountries: d.nCountries, day: d.day, player: d.player, nextArmyId: d.nextArmyId, countries: d.countries, armies: d.armies,
-    wars: d.wars, truces: d.truces, factions: d.factions, nextFaction: d.nextFaction, fronts: d.fronts || [], nextFront: d.nextFront || 1, log: d.log, logSeq: d.logSeq || 0, over: d.over, landCount: d.landCount,
+    wars: d.wars, truces: d.truces, factions: d.factions, nextFaction: d.nextFaction, fronts: d.fronts || [], nextFront: d.nextFront || 1, templates: d.templates || [], nextTemplate: d.nextTemplate || 1, difficulty: d.difficulty || 'normal', log: d.log, logSeq: d.logSeq || 0, over: d.over, landCount: d.landCount,
   });
   d.provs.forEach(([owner, controller, industry, civ, mil], i) => Object.assign(G.provs[i], { owner, controller, industry, civ, mil, slots: industry + SLOT_BONUS }));
   computeSupply(G);

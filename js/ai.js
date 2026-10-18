@@ -9,26 +9,29 @@ function aiTick(G, c) {
   for (const a of G.armies) if (a.owner === c.id && !a.path.length) aiOrder(G, c, a);
 }
 
-// 보병 2 : 기갑 1 비율, 영토에 산지가 많으면 기갑 대신 산악보병
+// 보병 → 보병+포병 → 기갑(영토에 산지가 많으면 산악보병) 순으로 돌아가며 훈련
 function aiLineType(G, c) {
-  if (c.queue.length % 3 !== 2) return 'inf';
+  const i = c.queue.length % 3;
+  if (i === 0) return 'inf';
+  if (i === 1) return 'cmb';
   const own = G.provs.filter(p => p.owner === c.id);
   const rough = own.filter(p => p.terrain === 'mountain' || p.terrain === 'hills').length / own.length;
   return rough > 0.3 ? 'mtn' : 'arm';
 }
 
-// 장비 할당(보병장비:전차 ≈ 65:35, 비축이 한쪽에 쏠리면 반대쪽으로)과 공장 건설(민수:군수 ≈ 1.2:1)
+// 장비 할당: 기본 비율(보병장비 .5 : 전차 .3 : 야포 .2)에 비축이 적은 쪽을 더 반영, 공장 건설은 민수:군수 ≈ 1.2:1
 function aiEconomy(G, c) {
-  const mil = (c.fac || factoriesOf(G, c.id)).mil;
-  let share = 0.65;
-  if (c.equip.small > c.equip.tank * 4 + 80) share = 0.35;
-  else if (c.equip.tank > c.equip.small + 100) share = 0.85;
-  const small = Math.round(mil * share);
-  c.alloc = { small, tank: mil - small };
+  const mil = (c.fac || factoriesOf(G, c.id)).mil, base = { small: 0.5, tank: 0.3, gun: 0.2 };
+  const w = {}; let sum = 0;
+  for (const k of Object.keys(base)) { w[k] = base[k] / (1 + (c.equip[k] || 0) / 80); sum += w[k]; }
+  const alloc = {}; let used = 0;
+  const rem = Object.keys(w).map(k => { const x = mil * w[k] / sum; alloc[k] = Math.floor(x); used += alloc[k]; return [k, x - alloc[k]]; }).sort((p, q) => q[1] - p[1]);
+  for (let i = 0; used < mil; i++, used++) alloc[rem[i % rem.length][0]]++;
+  c.alloc = alloc;
 
   if (c.construction.length < 2 && c.pp >= FACTORY_COST * 0.5) {
     const spots = G.provs.filter(p => p.land && p.owner === c.id && p.controller === c.id && freeSlots(c, p) > 0)
-      .sort((a, b) => b.industry - a.industry);
+      .sort((x, y) => y.industry - x.industry);
     if (spots.length) queueBuild(G, c.id, spots[0].id, c.fac.civ < c.fac.mil * 1.2 ? 'civ' : 'mil');
   }
 }
@@ -53,10 +56,10 @@ function aiDiplomacy(G, c) {
     if (pick) formAlliance(G, c.id, pick.id);
   }
   if (!wars.length) {
-    if (G.day < 40 || G.rnd() > 0.18) return;
+    if (G.day < 40 || G.rnd() > Math.min(0.9, 0.18 * diffOf(G).warProb)) return;
     const mine = strength(G, c.id);
     const cands = neighborsOf(G, c.id)
-      .filter(o => (G.truces[warKey(c.id, o)] || 0) <= G.day && !sameFaction(G, c.id, o) && !(o === G.player && G.day < 75))
+      .filter(o => (G.truces[warKey(c.id, o)] || 0) <= G.day && !sameFaction(G, c.id, o) && !(o === G.player && G.day < diffOf(G).warDay))
       .map(o => ({ o, s: strength(G, o) }))
       .filter(x => x.s < mine * 1.05)
       .sort((a, b) => a.s - b.s);
@@ -80,9 +83,9 @@ function aiOrder(G, c, army) {
     const cur = q.shift(), d = dist.get(cur);
     if (cur !== army.prov) {
       const p = G.provs[cur];
-      const eHp = enemiesAt(G, cur, c.id).reduce((s, x) => s + x.hp, 0);
+      const eHp = enemiesAt(G, cur, c.id).reduce((s, x) => s + armyStr(x), 0);
       const enemyLand = p.controller >= 0 && atWar(G, c.id, p.controller);
-      if ((enemyLand || eHp > 0) && eHp <= army.hp * 1.3 && sup[cur] <= SUPPLY_RANGE + 1) {
+      if ((enemyLand || eHp > 0) && eHp <= armyStr(army) * 1.3 && sup[cur] <= SUPPLY_RANGE + 1) {
         const capital = [p.owner, p.controller].some(o => o >= 0 && atWar(G, c.id, o) && G.countries[o].capital === p.id);
         const score = d - (capital ? 3 : 0) + eHp * 0.5;
         if (score < bestScore) { bestScore = score; best = cur; }
