@@ -107,4 +107,63 @@ test('강화 + 점령지 요구는 점령한 지역의 소유권을 넘긴다', 
   assert.ok(!A.atWar(G, 0, 1));
 });
 
+// 플레이어(0)가 이웃과 전쟁 중이고 접경 지역에 병력을 몰아 둔 시나리오
+function frontScenario(mode, extra) {
+  const G = A.newGame(1, 6);
+  G.player = 0; G.countries[0].ai = false; G.countries[0].queue = [];
+  const enemy = A.neighborsOf(G, 0)[0];
+  A.declareWar(G, 0, enemy);
+  const seed = G.provs.find(p => p.owner === 0 && p.adj.some(q => G.provs[q].owner === enemy));
+  const f = A.createFront(G, 0, seed.id, mode);
+  for (let i = 0; i < extra; i++) A.spawnArmy(G, 0, G.countries[0].capital, 'inf');
+  A.assignToFront(G, f, new Set(G.armies.filter(a => a.owner === 0).map(a => a.id)));
+  return { G, f, enemy };
+}
+
+test('전선: 접경 계산과 생성 조건', () => {
+  const { G, f, enemy } = frontScenario('hold', 0);
+  assert.strictEqual(f.enemy, enemy);
+  assert.ok(f.border.length >= 1);
+  for (const b of f.border) {
+    assert.strictEqual(G.provs[b].controller, 0);
+    assert.ok(G.provs[b].adj.some(q => G.provs[q].controller === enemy));
+  }
+  assert.strictEqual(A.createFront(G, 1, G.countries[1].capital, 'hold'), null, '전쟁 중이 아닌 곳엔 만들 수 없다');
+});
+
+test('전선(방어): 사단이 접경 지역으로 모여 분산된다', () => {
+  const { G, f } = frontScenario('hold', 6);
+  for (let i = 0; i < 25; i++) A.tickDay(G);
+  const mine = G.armies.filter(a => a.owner === 0 && a.front === f.id);
+  const onBorder = mine.filter(a => f.border.includes(a.prov) || a.path.length);
+  assert.ok(onBorder.length >= mine.length * 0.8, `armies at/going to border: ${onBorder.length}/${mine.length}`);
+  if (f.border.length >= 2) assert.ok(new Set(mine.map(a => a.prov)).size >= 2, 'spread over border provinces');
+});
+
+test('전선(공격): 우세하면 자동으로 적 지역을 점령해 나간다', () => {
+  const { G, f, enemy } = frontScenario('attack', 14);
+  G.countries[enemy].queue = [];
+  const before = G.provs.filter(p => p.controller === 0).length;
+  for (let i = 0; i < 120; i++) A.tickDay(G);
+  const gained = G.provs.filter(p => p.controller === 0).length - before;
+  assert.ok(gained >= 3, `front pushed forward: +${gained} provinces`);
+});
+
+test('전선: 전쟁이 끝나면 해산되고 사단은 풀려난다', () => {
+  const { G, f, enemy } = frontScenario('hold', 2);
+  for (const k of Object.keys(G.wars)) delete G.wars[k];   // 강화 성립을 모사
+  A.tickDay(G);
+  assert.ok(!G.fronts.includes(f));
+  assert.ok(G.armies.every(a => a.front !== f.id));
+});
+
+test('전선: 저장/불러오기 후에도 같은 결과', () => {
+  const x = frontScenario('attack', 8).G, y = frontScenario('attack', 8).G;
+  for (let i = 0; i < 40; i++) { A.tickDay(x); A.tickDay(y); }
+  const z = A.deserialize(JSON.parse(snap(y)));
+  assert.strictEqual(z.fronts.length, y.fronts.length);
+  for (let i = 0; i < 40; i++) { A.tickDay(x); A.tickDay(z); }
+  assert.strictEqual(snap(x), snap(z));
+});
+
 console.log(`${n} tests passed`);

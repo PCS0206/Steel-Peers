@@ -39,7 +39,7 @@ const warKey = (a, b) => (a < b ? a + '-' + b : b + '-' + a);
 
 function emptyState(seed, map) {
   return {
-    seed, map, provs: map.provs, countries: [], armies: [], wars: {}, truces: {}, factions: [], nextFaction: 1,
+    seed, map, provs: map.provs, countries: [], armies: [], wars: {}, truces: {}, factions: [], nextFaction: 1, fronts: [], nextFront: 1,
     day: 0, log: [], nextArmyId: 1, player: -1, over: null, dirty: true, landCount: 0, supply: [], vis: null,
     rnd: mulberry32(seed),
   };
@@ -95,7 +95,7 @@ function newGame(seed, nCountries) {
 }
 
 function spawnArmy(G, owner, prov, type, amount = 1) {
-  const a = { id: G.nextArmyId++, owner, prov, hp: amount, comp: { [type]: amount }, org: 1, path: [], prog: 0 };
+  const a = { id: G.nextArmyId++, owner, prov, hp: amount, comp: { [type]: amount }, org: 1, path: [], prog: 0, front: null, born: G.day };
   G.armies.push(a);
   return a;
 }
@@ -112,7 +112,7 @@ function splitArmy(G, a, type) {
   if (!(a.comp[type] >= 1) || a.hp < 2) return null;
   a.comp[type] -= 1; a.hp -= 1;
   const n = spawnArmy(G, a.owner, a.prov, type, 1);
-  n.org = a.org;
+  n.org = a.org; n.front = a.front;
   return n;
 }
 
@@ -309,6 +309,7 @@ function tickDay(G) {
   combat(G);
   occupation(G);
   upkeep(G);
+  frontsTick(G);
   for (const c of G.countries) if (c.alive && c.ai) aiTick(G, c);
   checkVictory(G);
 }
@@ -458,7 +459,7 @@ function checkVictory(G) {
 function serialize(G) {
   return JSON.parse(JSON.stringify({
     v: SAVE_VERSION, seed: G.seed, nCountries: G.nCountries, day: G.day, player: G.player, nextArmyId: G.nextArmyId,
-    countries: G.countries, armies: G.armies, wars: G.wars, truces: G.truces, factions: G.factions, nextFaction: G.nextFaction,
+    countries: G.countries, armies: G.armies, wars: G.wars, truces: G.truces, factions: G.factions, nextFaction: G.nextFaction, fronts: G.fronts, nextFront: G.nextFront,
     log: G.log.slice(-60), over: G.over, landCount: G.landCount, provs: G.provs.map(p => [p.owner, p.controller, p.industry]),
   }));
 }
@@ -468,7 +469,7 @@ function deserialize(d) {
   const G = emptyState(d.seed, generateMap(d.seed));
   Object.assign(G, {
     nCountries: d.nCountries, day: d.day, player: d.player, nextArmyId: d.nextArmyId, countries: d.countries, armies: d.armies,
-    wars: d.wars, truces: d.truces, factions: d.factions, nextFaction: d.nextFaction, log: d.log, over: d.over, landCount: d.landCount,
+    wars: d.wars, truces: d.truces, factions: d.factions, nextFaction: d.nextFaction, fronts: d.fronts || [], nextFront: d.nextFront || 1, log: d.log, over: d.over, landCount: d.landCount,
   });
   d.provs.forEach(([owner, controller, industry], i) => Object.assign(G.provs[i], { owner, controller, industry }));
   computeSupply(G);

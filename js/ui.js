@@ -11,7 +11,7 @@ let G = null;
 let phase = 'menu';             // menu | pick | play | over
 let speed = 0, acc = 0, lastT = 0;
 let cam = { x: 0, y: 0, z: 1 }, minZ = 0.4;
-let hover = -1, selProv = -1, selArmies = new Set(), moveMode = false;
+let hover = -1, selProv = -1, selArmies = new Set(), moveMode = false, selFront = null;
 let panelDirty = true;
 
 const isMobile = () => innerWidth <= 720;
@@ -46,7 +46,7 @@ const isFriend = o => G.player >= 0 && (o === G.player || sameFaction(G, G.playe
 
 // ---------- 게임 시작/저장 ----------
 function enterGame(g, p) {
-  G = g; phase = p; speed = 0; selProv = -1; selArmies.clear(); hover = -1; moveMode = false;
+  G = g; phase = p; speed = 0; selProv = -1; selArmies.clear(); hover = -1; moveMode = false; selFront = null;
   $('overlay').classList.add('hidden');
   G.dirty = true; panelDirty = true;
 }
@@ -114,7 +114,7 @@ function orderMove(target) {
   let moved = 0;
   for (const a of armies) {
     const p = findPath(G, a.prov, target, a.owner);
-    if (p) { a.path = p; a.prog = 0; moved++; }
+    if (p) { a.path = p; a.prog = 0; moved++; a.front = null; }
   }
   if (!moved) banner('이동할 수 없는 지역입니다 (전쟁 중이 아닌 국가의 영토)', 2000);
   G.dirty = true;
@@ -223,6 +223,13 @@ $('panel').addEventListener('click', e => {
     case 'demand': banner(proposePeace(G, G.player, other, true).msg, 3000); break;
     case 'ally': banner(proposeAlliance(G, G.player, other).msg, 2500); break;
     case 'leave': leaveFaction(G, G.player); break;
+    case 'fcreate': { const f = createFront(G, G.player, selProv, b.dataset.mode); if (f) { selFront = f.id; assignToFront(G, f, selArmies); } else banner('이 지역에는 전선을 만들 수 없습니다 (적 지배지와 맞닿은 내 지역)', 2200); break; }
+    case 'fselect': selFront = +b.dataset.id; break;
+    case 'fmode': { const f = G.fronts.find(x => x.id === +b.dataset.id); if (f) f.mode = f.mode === 'attack' ? 'hold' : 'attack'; break; }
+    case 'fassign': { const f = G.fronts.find(x => x.id === +b.dataset.id); if (f) assignToFront(G, f, selArmies); break; }
+    case 'fall': { const f = G.fronts.find(x => x.id === +b.dataset.id); if (f) assignToFront(G, f, new Set(G.armies.filter(a => a.owner === G.player && !a.front).map(a => a.id))); break; }
+    case 'fauto': { const f = G.fronts.find(x => x.id === +b.dataset.id); if (f) { const on = !f.auto; G.fronts.forEach(x => { if (x.owner === f.owner) x.auto = false; }); f.auto = on; } break; }
+    case 'fdel': { const f = G.fronts.find(x => x.id === +b.dataset.id); if (f) { dissolveFront(G, f); if (selFront === f.id) selFront = null; } break; }
     case 'move': moveMode = !moveMode; if (moveMode) banner('이동할 지역을 탭하세요', 2000); break;
     case 'split': {
       const a = G.armies.find(x => selArmies.has(x.id) && x.comp[b.dataset.type] >= 1 && x.hp >= 2);
@@ -277,6 +284,22 @@ function renderPanel() {
   h += `<div class="row">` + Object.entries(UNITS).map(([t, u]) => `<button data-act="train" data-type="${t}" ${me.queue.length >= MAX_LINES ? 'disabled' : ''} title="PP ${u.pp} · 인력 ${u.mp}k">+${u.name}</button>`).join('') + `</div>`;
   if (!me.queue.length) h += `<div class="dim">라인이 없으면 PP가 쌓이기만 합니다.</div>`;
 
+  const myFronts = G.fronts.filter(f => f.owner === me.id);
+  if (myFronts.length) {
+    h += `<h3>전선</h3>`;
+    for (const f of myFronts) {
+      const fa = frontArmies(G, f), hp = fa.reduce((s, a) => s + a.hp, 0), atk = f.mode === 'attack';
+      h += `<div class="front${f.id === selFront ? ' sel' : ''}"><a href="#" data-act="fselect" data-id="${f.id}" onclick="return false"><b>${atk ? '⚔' : '🛡'} ${esc(f.name)}</b></a> <span class="tag">${atk ? '공격' : '방어'}</span><br>`;
+      h += `<span class="dim">사단 ${hp.toFixed(1)} (${fa.length}부대) · 접경 ${f.border.length}지역</span><div class="row">`;
+      h += `<button data-act="fmode" data-id="${f.id}">${atk ? '방어로 전환' : '공격으로 전환'}</button>`;
+      h += `<button data-act="fassign" data-id="${f.id}" ${selArmies.size ? '' : 'disabled'}>선택 사단 배치</button>`;
+      h += `<button data-act="fall" data-id="${f.id}">남은 사단 전부</button>`;
+      h += `<button data-act="fauto" data-id="${f.id}" class="${f.auto ? 'on-mode' : ''}">신규 자동 배치${f.auto ? ' ON' : ''}</button>`;
+      h += `<button data-act="fdel" data-id="${f.id}">해산</button></div></div>`;
+    }
+    h += `<div class="dim">전선에 배치된 사단은 자동으로 움직입니다. 직접 이동 명령을 내리면 전선에서 빠집니다.</div>`;
+  }
+
   const p = selProv >= 0 ? G.provs[selProv] : null;
   if (p) {
     const owner = p.owner >= 0 ? G.countries[p.owner] : null, ctl = p.controller >= 0 ? G.countries[p.controller] : null;
@@ -289,7 +312,7 @@ function renderPanel() {
       h += `<h3>내 사단</h3>`;
       for (const a of mine) {
         const sup = isSupplied(G, a);
-        h += `<label class="army"><input type="checkbox" data-army="${a.id}" ${selArmies.has(a.id) ? 'checked' : ''}> ${compText(a)}<br><span class="dim">조직도 ${(a.org * 100).toFixed(0)}% · ${sup ? '<span class="ok">보급 양호</span>' : '<span class="warn">보급 끊김</span>'}${a.path.length ? ' · 이동 중' : ''}</span></label>`;
+        h += `<label class="army"><input type="checkbox" data-army="${a.id}" ${selArmies.has(a.id) ? 'checked' : ''}> ${compText(a)}<br><span class="dim">조직도 ${(a.org * 100).toFixed(0)}% · ${sup ? '<span class="ok">보급 양호</span>' : '<span class="warn">보급 끊김</span>'}${a.path.length ? ' · 이동 중' : ''}${a.front ? ` · <span class="tag">${esc((G.fronts.find(f => f.id === a.front) || { name: '' }).name)}</span>` : ''}</span></label>`;
       }
       const types = Object.keys(UNITS).filter(t => mine.some(a => a.comp[t] >= 1 && a.hp >= 2));
       h += `<div class="row">${types.map(t => `<button data-act="split" data-type="${t}">${UNITS[t].name} 1 분리</button>`).join('')}<button data-act="move" class="${moveMode ? 'on-mode' : ''}">${moveMode ? '목적지를 탭…' : '이동 모드'}</button></div><div class="dim">우클릭 / 길게 누르기 / 이동 모드로 명령</div>`;
@@ -300,6 +323,9 @@ function renderPanel() {
       for (const [o, hp] of Object.entries(foes)) h += `<div>${sw(G.countries[o])}${esc(G.countries[o].name)} ${hp.toFixed(1)}개 사단</div>`;
     } else h += `<div class="dim">시야 밖 — 부대 정보를 알 수 없다</div>`;
 
+    if (p.controller === me.id && p.adj.some(n => G.provs[n].land && G.provs[n].controller >= 0 && atWar(G, me.id, G.provs[n].controller))) {
+      h += `<h3>전선</h3><div class="row"><button data-act="fcreate" data-mode="attack">⚔ 공격 전선 생성</button><button data-act="fcreate" data-mode="hold">🛡 방어 전선 생성</button></div><div class="dim">선택한 사단이 있으면 함께 배치됩니다.</div>`;
+    }
     if (owner && owner.id !== me.id) {
       const war = atWar(G, me.id, owner.id), allied = sameFaction(G, me.id, owner.id);
       h += `<h3>외교 — ${esc(owner.name)}${factionTag(owner)}</h3><div class="row">`;
@@ -324,12 +350,44 @@ function renderLog() {
 }
 
 // ---------- 그리기 ----------
-function flag(x, y, color, n, selected) {
+function flag(x, y, color, n, selected, badge) {
   const w = 22, h = 14;
   ctx.fillStyle = `rgb(${color})`; ctx.fillRect(x - w / 2, y - h / 2, w, h);
   ctx.lineWidth = selected ? 2 : 1; ctx.strokeStyle = selected ? '#fff' : '#101820'; ctx.strokeRect(x - w / 2, y - h / 2, w, h);
   ctx.fillStyle = '#fff'; ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.strokeStyle = '#000'; ctx.lineWidth = 2.5; ctx.strokeText(n, x, y + 0.5); ctx.fillText(n, x, y + 0.5);
+  if (badge) { // 전선 배치 표시: 공격=주황, 방어=파랑
+    ctx.beginPath(); ctx.arc(x + w / 2, y - h / 2, 3.6, 0, Math.PI * 2);
+    ctx.fillStyle = badge === 'attack' ? '#ff6a40' : '#4a9bff'; ctx.fill(); ctx.lineWidth = 1; ctx.strokeStyle = '#fff'; ctx.stroke();
+  }
+}
+
+// 전선: 내 접경 지역과 적 지배지 사이의 경계를 굵게 표시
+function drawFronts() {
+  const z = cam.z;
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  for (const f of G.fronts) {
+    if (f.owner !== G.player) continue;
+    const sel = f.id === selFront, path = new Path2D();
+    for (const pid of f.border) for (const e of G.provs[pid].edges) {
+      if (e.nb < 0 || G.provs[e.nb].controller !== f.enemy) continue;
+      path.moveTo(e.pts[0].x, e.pts[0].y);
+      for (let i = 1; i < e.pts.length; i++) path.lineTo(e.pts[i].x, e.pts[i].y);
+    }
+    ctx.strokeStyle = 'rgba(0,0,0,0.8)'; ctx.lineWidth = (sel ? 9 : 6.5) / z; ctx.stroke(path);
+    ctx.strokeStyle = f.mode === 'attack' ? 'rgba(255,106,64,0.98)' : 'rgba(74,155,255,0.98)'; ctx.lineWidth = (sel ? 5.5 : 3.6) / z; ctx.stroke(path);
+    if (sel) { ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 1.2 / z; ctx.stroke(path); }
+  }
+}
+
+// 이동 화살표 머리
+function arrowHead(from, to, size) {
+  const ang = Math.atan2(to.y - from.y, to.x - from.x);
+  ctx.beginPath();
+  ctx.moveTo(to.x, to.y);
+  ctx.lineTo(to.x - size * Math.cos(ang - 0.45), to.y - size * Math.sin(ang - 0.45));
+  ctx.lineTo(to.x - size * Math.cos(ang + 0.45), to.y - size * Math.sin(ang + 0.45));
+  ctx.closePath(); ctx.fill();
 }
 
 function draw() {
@@ -344,6 +402,7 @@ function draw() {
   }
   ctx.setTransform(dpr * cam.z, 0, 0, dpr * cam.z, -cam.x * cam.z * dpr, -cam.y * cam.z * dpr);
   drawMap(ctx, G, cam.z, phase === 'play' || phase === 'pick' ? hover : -1, selProv);
+  drawFronts();
 
   // 국가명
   if (cam.z < 2.5) {
@@ -373,20 +432,27 @@ function draw() {
     ctx.stroke();
   }
   ctx.setLineDash([]);
+  for (const a of G.armies) { // 화살표 머리
+    if (!a.path.length || (a.owner !== G.player && !(canSee(a.prov) && selProv === a.prov))) continue;
+    const pts = [G.provs[a.prov], ...a.path.map(n => G.provs[n])], last = pts[pts.length - 1], prev = pts[pts.length - 2];
+    ctx.fillStyle = a.owner === G.player ? (a.front ? '#ff9a70' : '#ffe58a') : `rgb(${G.countries[a.owner].color})`;
+    arrowHead(prev, last, 7 / Math.max(cam.z, 0.7));
+  }
 
   // 부대 마커 (시야 밖의 적 부대는 숨김)
   const groups = new Map();
   for (const a of G.armies) {
     if (!isFriend(a.owner) && !canSee(a.prov)) continue;
     const key = a.prov + ':' + a.owner;
-    if (!groups.has(key)) groups.set(key, { prov: a.prov, owner: a.owner, hp: 0, sel: false });
+    if (!groups.has(key)) groups.set(key, { prov: a.prov, owner: a.owner, hp: 0, sel: false, badge: null });
     const g = groups.get(key); g.hp += a.hp; g.sel = g.sel || selArmies.has(a.id);
+    if (a.front && !g.badge) { const f = G.fronts.find(x => x.id === a.front); if (f) g.badge = f.mode; }
   }
   const perProv = new Map();
   for (const g of groups.values()) {
     const i = perProv.get(g.prov) || 0; perProv.set(g.prov, i + 1);
     const p = G.provs[g.prov];
-    flag(p.x + i * 14 - 4, p.y + 4 + i * 10, G.countries[g.owner].color, Math.ceil(g.hp - 1e-6), g.sel);
+    flag(p.x + i * 14 - 4, p.y + 4 + i * 10, G.countries[g.owner].color, Math.ceil(g.hp - 1e-6), g.sel, g.badge);
   }
 }
 

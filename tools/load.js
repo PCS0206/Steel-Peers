@@ -2,10 +2,10 @@
 const fs = require('fs'), vm = require('vm'), path = require('path');
 const EXPORTS = ['newGame', 'tickDay', 'serialize', 'deserialize', 'ownedCount', 'controlledCount', 'strength', 'declareWar', 'proposePeace',
   'proposeAlliance', 'formAlliance', 'findPath', 'visibleSet', 'splitArmy', 'mergeArmies', 'spawnArmy', 'enterable', 'moveDays',
-  'warScore', 'atWar', 'sameFaction', 'neighborsOf', 'UNITS', 'TERRAIN', 'generateMap', 'findProvince'];
+  'warScore', 'atWar', 'sameFaction', 'neighborsOf', 'UNITS', 'TERRAIN', 'generateMap', 'findProvince', 'createFront', 'assignToFront', 'frontBorder', 'dissolveFront'];
 exports.loadGame = function () {
   const ctx = vm.createContext({ console, Math, JSON });
-  const src = ['map', 'game', 'ai'].map(f => fs.readFileSync(path.join(__dirname, '..', 'js', f + '.js'), 'utf8')).join('\n;\n')
+  const src = ['map', 'game', 'fronts', 'ai'].map(f => fs.readFileSync(path.join(__dirname, '..', 'js', f + '.js'), 'utf8')).join('\n;\n')
     + `\n;globalThis.API = { ${EXPORTS.join(', ')} };`;
   vm.runInContext(src, ctx, { filename: 'game-bundle.js' });
   return ctx.API;
