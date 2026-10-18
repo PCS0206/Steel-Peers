@@ -12,6 +12,7 @@ let phase = 'menu';             // menu | pick | play | over
 let speed = 0, acc = 0, lastT = 0;
 let cam = { x: 0, y: 0, z: 1 }, minZ = 0.4;
 let hover = -1, selProv = -1, selArmies = new Set(), moveMode = false, selFront = null;
+let drawMode = null;            // 전선/화살표 그리기: { kind:'line'|'arrow', front, items:[], enemy, anchor }
 let panelDirty = true;
 
 const isMobile = () => innerWidth <= 720;
@@ -46,7 +47,7 @@ const isFriend = o => G.player >= 0 && (o === G.player || sameFaction(G, G.playe
 
 // ---------- 게임 시작/저장 ----------
 function enterGame(g, p) {
-  G = g; lastEventId = g.logSeq; phase = p; speed = 0; selProv = -1; selArmies.clear(); hover = -1; moveMode = false; selFront = null;
+  G = g; lastEventId = g.logSeq; phase = p; speed = 0; selProv = -1; selArmies.clear(); hover = -1; moveMode = false; selFront = null; drawMode = null; syncDrawBar();
   $('overlay').classList.add('hidden');
   G.dirty = true; panelDirty = true;
 }
@@ -195,6 +196,76 @@ function confirmLeave() {
 }
 const resultToast = r => toast(r.msg, r.ok ? 'good' : 'warn', r.ok ? 5500 : 4500);
 
+// ---------- 전선 / 공격 화살표 그리기 ----------
+function startLineDraw() {
+  if (!warsOf(G, G.player).length) return toast('전쟁 중인 적이 없어 전선을 그릴 수 없습니다', 'warn');
+  moveMode = false; drawMode = { kind: 'line', front: null, items: [], enemy: null, anchor: null }; syncDrawBar();
+}
+function startArrowDraw(frontId) {
+  moveMode = false; drawMode = { kind: 'arrow', front: frontId, items: [], enemy: null, anchor: null }; syncDrawBar();
+}
+function drawCandidate(id) {
+  const d = drawMode, P = G.provs;
+  if (!d || id < 0) return false;
+  if (d.kind === 'line') return !d.items.includes(id) && frontCandidate(G, G.player, id, d.enemy) >= 0;
+  const f = G.fronts.find(x => x.id === d.front);
+  if (!f) return false;
+  const last = d.items.length ? d.items[d.items.length - 1] : d.anchor;
+  if (last === null) return f.border.includes(id) || (P[id].land && P[id].controller === f.enemy && P[id].adj.some(n => f.border.includes(n)));
+  return P[id].land && P[id].controller === f.enemy && !d.items.includes(id) && P[id].adj.includes(last);
+}
+function drawAdd(id) {
+  if (!drawCandidate(id)) return;
+  const d = drawMode;
+  if (d.kind === 'line') { if (d.enemy === null) d.enemy = frontCandidate(G, G.player, id); d.items.push(id); }
+  else {
+    const f = G.fronts.find(x => x.id === d.front);
+    if (d.anchor === null && !d.items.length && f.border.includes(id)) d.anchor = id; else d.items.push(id);
+  }
+  syncDrawBar();
+}
+function drawUndo() {
+  const d = drawMode; if (!d) return;
+  if (d.items.length) d.items.pop(); else if (d.anchor !== null) d.anchor = null;
+  if (d.kind === 'line' && !d.items.length) d.enemy = null;
+  syncDrawBar();
+}
+function drawCancel() { drawMode = null; syncDrawBar(); panelDirty = true; }
+function drawFinish() {
+  const d = drawMode; if (!d) return;
+  if (!d.items.length) return toast(d.kind === 'line' ? '접경 지역을 먼저 선택하세요 (드래그 또는 탭)' : '적 지역을 따라 화살표를 그리세요', 'warn');
+  const items = [...d.items], me = G.player;
+  drawMode = null; syncDrawBar(); panelDirty = true;
+  if (d.kind === 'arrow') {
+    const f = G.fronts.find(x => x.id === d.front);
+    return f ? resultToast(addArrow(G, f, items)) : undefined;
+  }
+  const make = mode => () => {
+    const f = createFront(G, me, items[0], mode, items);
+    if (!f) return toast('전선을 만들 수 없습니다', 'warn');
+    selFront = f.id; assignToFront(G, f, selArmies);
+    toast(`${f.name} 편성 (${mode === 'attack' ? '공격' : '방어'}) — 사단을 배치하세요${mode === 'attack' ? '. 공격 화살표로 진격 목표를 정할 수 있습니다' : ''}`, 'good', 6500);
+  };
+  showModal({
+    tone: 'warn', title: '전선 편성',
+    body: `선택한 접경 <b>${items.length}개 지역</b>에 전선을 만듭니다. 모드를 고르세요.<ul><li>⚔ <b>공격</b>: 접경에 집결해 적 지역으로 진격 (이후 화살표로 목표 지정)</li><li>🛡 <b>방어</b>: 접경에 병력을 분산하고 침투한 적을 막음</li></ul>`,
+    buttons: [{ label: '⚔ 공격 전선', primary: true, onClick: make('attack') }, { label: '🛡 방어 전선', onClick: make('hold') }, { label: '취소' }],
+  });
+}
+function syncDrawBar() {
+  const bar = $('drawbar'), d = drawMode;
+  document.body.classList.toggle('drawing', !!d);
+  bar.classList.toggle('hidden', !d);
+  if (!d) return;
+  $('drawtext').innerHTML = d.kind === 'line'
+    ? `<b>🖊 전선 그리기</b> — 적과 맞닿은 <b>내 접경 지역</b>을 드래그(또는 탭)해서 고르세요. <span class="dim">선택 ${d.items.length}개</span>`
+    : `<b>➜ 공격 화살표</b> — 전선 위에서 시작해 <b>적 지역을 따라</b> 드래그(또는 탭)하세요. <span class="dim">경로 ${d.items.length}개</span>`;
+}
+document.querySelector('#drawbar .btns').addEventListener('click', e => {
+  const b = e.target.closest('[data-draw]'); if (!b) return;
+  ({ undo: drawUndo, finish: drawFinish, cancel: drawCancel })[b.dataset.draw]();
+});
+
 function setSpeed(s) {
   if (phase !== 'play') return;
   speed = s; panelDirty = true; syncTop(); $('banner').style.display = 'none';
@@ -243,7 +314,10 @@ canvas.addEventListener('pointerdown', e => {
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   canvas.setPointerCapture(e.pointerId);
   ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  if (ptrs.size === 1) {
+  if (ptrs.size === 1 && drawMode) {   // 그리기 중: 누르고 드래그하면 지역을 칠한다 (두 손가락은 핀치 확대)
+    gesture = { paint: true, moved: true, x: e.clientX, y: e.clientY };
+    drawAdd(provAt(e.clientX, e.clientY));
+  } else if (ptrs.size === 1) {
     gesture = { x: e.clientX, y: e.clientY, moved: false, long: false, touch: e.pointerType !== 'mouse' };
     if (gesture.touch) { // 길게 누르면 이동 명령
       const g = gesture;
@@ -259,7 +333,9 @@ canvas.addEventListener('pointermove', e => {
   if (ptrs.has(e.pointerId)) {
     const prev = ptrs.get(e.pointerId);
     ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (ptrs.size === 2 && gesture && gesture.pinch) {
+    if (gesture && gesture.paint) {
+      if (ptrs.size === 1 && drawMode) drawAdd(provAt(e.clientX, e.clientY));
+    } else if (ptrs.size === 2 && gesture && gesture.pinch) {
       const d = pdist(), [a, b] = [...ptrs.values()];
       zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, d / gesture.pinch);
       gesture.pinch = d;
@@ -287,6 +363,7 @@ canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
 canvas.addEventListener('contextmenu', e => {
   e.preventDefault();
+  if (drawMode) return drawCancel();
   if (phase !== 'play') return;
   const id = provAt(e.clientX, e.clientY);
   if (id >= 0) orderMove(id);
@@ -299,6 +376,7 @@ window.addEventListener('keydown', e => {
     return;
   }
   if (phase !== 'play' || e.target.tagName === 'INPUT') return;
+  if (drawMode) { if (e.code === 'Escape') drawCancel(); else if (e.code === 'Enter') drawFinish(); else if (e.code === 'Backspace') drawUndo(); return; }
   if (e.code === 'Space') { e.preventDefault(); setSpeed(speed ? 0 : 1); }
   else if (['Digit1', 'Digit2', 'Digit3'].includes(e.code)) setSpeed(+e.code.slice(-1));
 });
@@ -334,6 +412,9 @@ $('panel').addEventListener('click', e => {
     case 'ally': resultToast(proposeAlliance(G, G.player, other)); break;
     case 'leave': confirmLeave(); break;
     case 'fcreate': { const f = createFront(G, G.player, selProv, b.dataset.mode); if (f) { selFront = f.id; assignToFront(G, f, selArmies); } else toast('이 지역에는 전선을 만들 수 없습니다 (적 지배지와 맞닿은 내 지역)', 'warn'); break; }
+    case 'fdraw': startLineDraw(); break;
+    case 'farrow': startArrowDraw(+b.dataset.id); break;
+    case 'farrowclear': { const f = G.fronts.find(x => x.id === +b.dataset.id); if (f) f.arrows = []; break; }
     case 'fselect': selFront = +b.dataset.id; break;
     case 'fmode': { const f = G.fronts.find(x => x.id === +b.dataset.id); if (f) f.mode = f.mode === 'attack' ? 'hold' : 'attack'; break; }
     case 'fassign': { const f = G.fronts.find(x => x.id === +b.dataset.id); if (f) assignToFront(G, f, selArmies); break; }
@@ -414,20 +495,23 @@ function renderPanel() {
   h += `<div class="dim">${Object.entries(UNITS).map(([t, u2]) => `${u2.name}: ${costText(u2)}`).join('<br>')}</div>`;
   if (!me.queue.length) h += `<div class="warn">훈련 라인이 없으면 사단이 편성되지 않습니다.</div>`;
 
-  const myFronts = G.fronts.filter(f => f.owner === me.id);
-  if (myFronts.length) {
+  const myFronts = G.fronts.filter(f => f.owner === me.id), atWarNow = warsOf(G, me.id).length > 0;
+  if (myFronts.length || atWarNow) {
     h += `<h3>전선</h3>`;
+    if (atWarNow) h += `<div class="row"><button data-act="fdraw" class="${drawMode && drawMode.kind === 'line' ? 'on-mode' : ''}">🖊 전선 그리기</button></div><div class="dim">적과 맞닿은 접경 지역을 드래그해서 전선을 직접 긋습니다. 공격 전선은 이어서 <b>화살표</b>로 진격 목표를 정할 수 있습니다.</div>`;
     for (const f of myFronts) {
-      const fa = frontArmies(G, f), hp = fa.reduce((s, a) => s + a.hp, 0), atk = f.mode === 'attack';
+      const fa = frontArmies(G, f), hp = fa.reduce((s2, a) => s2 + a.hp, 0), atk = f.mode === 'attack', arrows = f.arrows || [];
       h += `<div class="front${f.id === selFront ? ' sel' : ''}"><a href="#" data-act="fselect" data-id="${f.id}" onclick="return false"><b>${atk ? '⚔' : '🛡'} ${esc(f.name)}</b></a> <span class="tag">${atk ? '공격' : '방어'}</span><br>`;
-      h += `<span class="dim">사단 ${hp.toFixed(1)} (${fa.length}부대) · 접경 ${f.border.length}지역</span><div class="row">`;
+      h += `<span class="dim">사단 ${hp.toFixed(1)} (${fa.length}부대) · 접경 ${f.border.length}지역 · ${f.line ? '직접 그린 라인' : '자동 라인'}${arrows.length ? ` · 화살표 ${arrows.length}` : ''}</span><div class="row">`;
+      if (atk) h += `<button data-act="farrow" data-id="${f.id}" class="${drawMode && drawMode.front === f.id ? 'on-mode' : ''}" ${arrows.length >= MAX_ARROWS ? 'disabled' : ''}>➜ 공격 화살표</button>`;
+      if (arrows.length) h += `<button data-act="farrowclear" data-id="${f.id}">화살표 지우기</button>`;
       h += `<button data-act="fmode" data-id="${f.id}">${atk ? '방어로 전환' : '공격으로 전환'}</button>`;
       h += `<button data-act="fassign" data-id="${f.id}" ${selArmies.size ? '' : 'disabled'}>선택 사단 배치</button>`;
       h += `<button data-act="fall" data-id="${f.id}">남은 사단 전부</button>`;
       h += `<button data-act="fauto" data-id="${f.id}" class="${f.auto ? 'on-mode' : ''}">신규 자동 배치${f.auto ? ' ON' : ''}</button>`;
       h += `<button data-act="fdel" data-id="${f.id}">해산</button></div></div>`;
     }
-    h += `<div class="dim">전선에 배치된 사단은 자동으로 움직입니다. 직접 이동 명령을 내리면 전선에서 빠집니다.</div>`;
+    if (myFronts.length) h += `<div class="dim">전선에 배치된 사단은 자동으로 움직입니다. 직접 이동 명령을 내리면 전선에서 빠집니다.</div>`;
   }
 
   const p = selProv >= 0 ? G.provs[selProv] : null;
@@ -459,7 +543,7 @@ function renderPanel() {
     } else h += `<div class="dim">시야 밖 — 부대 정보를 알 수 없다</div>`;
 
     if (p.controller === me.id && p.adj.some(n => G.provs[n].land && G.provs[n].controller >= 0 && atWar(G, me.id, G.provs[n].controller))) {
-      h += `<h3>전선</h3><div class="row"><button data-act="fcreate" data-mode="attack">⚔ 공격 전선 생성</button><button data-act="fcreate" data-mode="hold">🛡 방어 전선 생성</button></div><div class="dim">선택한 사단이 있으면 함께 배치됩니다.</div>`;
+      h += `<h3>전선</h3><div class="row"><button data-act="fcreate" data-mode="attack">⚔ 자동 공격 전선</button><button data-act="fcreate" data-mode="hold">🛡 자동 방어 전선</button></div><div class="dim">이 지역에서 이어지는 접경 전체를 자동으로 잡습니다. 선택한 사단이 있으면 함께 배치됩니다.</div>`;
     }
     if (owner && owner.id !== me.id) {
       const war = atWar(G, me.id, owner.id), allied = sameFaction(G, me.id, owner.id);
@@ -476,7 +560,7 @@ function renderPanel() {
     }
   }
   h += `<h3>세계</h3>`;
-  for (const c of G.countries) h += `<div>${sw(c)}${esc(c.name)}${factionTag(c)}${c.alive ? ` <span class="dim">${ownedCount(G, c.id)}지역${isFriend(c.id) || !G.vis ? ' · 전력 ' + strength(G, c.id).toFixed(1) : ''}</span>` : ' ✝'}</div>`;
+  for (const c of G.countries) h += `<div>${sw(c)}${esc(c.name)}${atWar(G, me.id, c.id) ? ' <span class="warn" title="교전 중">⚔ 적</span>' : ''}${factionTag(c)}${c.alive ? ` <span class="dim">${ownedCount(G, c.id)}지역${isFriend(c.id) || !G.vis ? ' · 전력 ' + strength(G, c.id).toFixed(1) : ''}</span>` : ' ✝'}</div>`;
   $('panel').innerHTML = h;
 }
 
@@ -512,6 +596,46 @@ function drawFronts() {
     ctx.strokeStyle = 'rgba(0,0,0,0.8)'; ctx.lineWidth = (sel ? 9 : 6.5) / z; ctx.stroke(path);
     ctx.strokeStyle = f.mode === 'attack' ? 'rgba(255,106,64,0.98)' : 'rgba(74,155,255,0.98)'; ctx.lineWidth = (sel ? 5.5 : 3.6) / z; ctx.stroke(path);
     if (sel) { ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 1.2 / z; ctx.stroke(path); }
+  }
+}
+
+// 공격 화살표: 전선 접경에서 시작해 적 지역을 따라 이어지는 굵은 화살표
+function drawArrows() {
+  const z = cam.z, P = G.provs;
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  for (const f of G.fronts) {
+    if (f.owner !== G.player) continue;
+    const sel = f.id === selFront;
+    for (const ar of f.arrows || []) {
+      const start = P[ar.path[0]].adj.find(n => f.border.includes(n));
+      const pts = [...(start !== undefined ? [P[start]] : []), ...ar.path.map(id => P[id])];
+      if (pts.length < 2) continue;
+      ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y); for (const q of pts.slice(1)) ctx.lineTo(q.x, q.y);
+      ctx.strokeStyle = 'rgba(0,0,0,0.8)'; ctx.lineWidth = (sel ? 8.5 : 7) / z; ctx.stroke();
+      ctx.strokeStyle = sel ? '#ffb347' : '#ff7a3c'; ctx.lineWidth = (sel ? 5 : 4) / z; ctx.stroke();
+      ctx.fillStyle = ctx.strokeStyle; arrowHead(pts[pts.length - 2], pts[pts.length - 1], 16 / z);
+    }
+  }
+}
+
+// 그리기 모드: 선택 가능한 지역을 깜빡이는 테두리로 보여주고, 지금까지 그린 선/화살표를 표시
+function drawDraft() {
+  const d = drawMode; if (!d) return;
+  const z = cam.z, P = G.provs, pulse = 0.5 + 0.5 * Math.sin(performance.now() / 160);
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  for (const p of P) {
+    if (!p.land || !drawCandidate(p.id)) continue;
+    ctx.fillStyle = `rgba(255,170,60,${0.1 + 0.12 * pulse})`; ctx.fill(p.path);
+    ctx.strokeStyle = `rgba(255,170,60,${0.55 + 0.4 * pulse})`; ctx.lineWidth = 2.2 / z; ctx.stroke(p.path);
+  }
+  for (const id of d.items) { ctx.fillStyle = 'rgba(255,140,40,0.45)'; ctx.fill(P[id].path); }
+  const pts = [...(d.anchor !== null ? [P[d.anchor]] : []), ...d.items.map(id => P[id])];
+  if (pts.length) {
+    ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y); for (const q of pts.slice(1)) ctx.lineTo(q.x, q.y);
+    ctx.strokeStyle = 'rgba(0,0,0,0.8)'; ctx.lineWidth = 7 / z; ctx.stroke();
+    ctx.strokeStyle = '#ffc060'; ctx.lineWidth = 4 / z; ctx.stroke();
+    if (d.kind === 'arrow' && pts.length >= 2) { ctx.fillStyle = '#ffc060'; arrowHead(pts[pts.length - 2], pts[pts.length - 1], 16 / z); }
+    for (const q of pts) { ctx.beginPath(); ctx.arc(q.x, q.y, 3.5 / z, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill(); }
   }
 }
 
@@ -554,7 +678,9 @@ function draw() {
   ctx.setTransform(dpr * cam.z, 0, 0, dpr * cam.z, -cam.x * cam.z * dpr, -cam.y * cam.z * dpr);
   drawMap(ctx, G, cam.z, phase === 'play' || phase === 'pick' ? hover : -1, selProv);
   drawFronts();
+  drawArrows();
   drawFactories();
+  drawDraft();
 
   // 국가명
   if (cam.z < 2.5) {
@@ -564,13 +690,15 @@ function draw() {
       const own = G.provs.filter(p => p.owner === c.id);
       if (!own.length) continue;
       const x = own.reduce((s, p) => s + p.x, 0) / own.length, y = own.reduce((s, p) => s + p.y, 0) / own.length;
-      ctx.lineWidth = 4; ctx.strokeStyle = '#000a'; ctx.strokeText(c.name, x, y);
-      ctx.fillStyle = '#fff'; ctx.globalAlpha = 0.85; ctx.fillText(c.name, x, y); ctx.globalAlpha = 1;
+      const foe = G.player >= 0 && atWar(G, G.player, c.id), ally = G.player >= 0 && sameFaction(G, G.player, c.id);
+      const label = foe ? `⚔ ${c.name}` : ally ? `🤝 ${c.name}` : c.name;
+      ctx.lineWidth = 4; ctx.strokeStyle = foe ? 'rgba(60,0,0,0.85)' : '#000a'; ctx.strokeText(label, x, y);
+      ctx.fillStyle = foe ? '#ff8a78' : ally ? '#9bf0a0' : '#fff'; ctx.globalAlpha = foe || ally ? 1 : 0.85; ctx.fillText(label, x, y); ctx.globalAlpha = 1;
     }
   }
   // 수도
   ctx.font = '14px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  for (const c of G.countries) if (c.alive) { const p = G.provs[c.capital]; ctx.fillStyle = '#ffe58a'; ctx.strokeStyle = '#000'; ctx.lineWidth = 3; ctx.strokeText('★', p.x, p.y - 14); ctx.fillText('★', p.x, p.y - 14); }
+  for (const c of G.countries) if (c.alive) { const p = G.provs[c.capital]; ctx.fillStyle = G.player >= 0 && atWar(G, G.player, c.id) ? '#ff6a5a' : '#ffe58a'; ctx.strokeStyle = '#000'; ctx.lineWidth = 3; ctx.strokeText('★', p.x, p.y - 14); ctx.fillText('★', p.x, p.y - 14); }
 
   // 이동 경로
   ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]);

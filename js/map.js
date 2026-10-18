@@ -197,7 +197,7 @@ function generateMap(seed) {
     }
   }
 
-  const m = { provs, cw, ch, sea: null, tex: null, land: null, coast: null, fill: [], occ: [], bProv: null, bOwn: null, ownSig: '', styleSig: '', cache: null, cacheS: 0, cacheDirty: true };
+  const m = { provs, cw, ch, sea: null, tex: null, land: null, coast: null, fill: [], occ: [], bProv: null, bOwn: null, bWar: null, ownSig: '', styleSig: '', cache: null, cacheS: 0, cacheDirty: true };
   if (typeof document !== 'undefined') buildMapLayers(m, seed);
   return m;
 }
@@ -271,7 +271,8 @@ const rgbStr = (r, gg, b) => `rgb(${Math.round(Math.min(255, r))},${Math.round(M
 // 소유·점령·시야에 따른 색과 국경 경로를 갱신 (상태가 바뀔 때만 호출)
 function updateMapStyle(G, vis) {
   const m = G.map, provs = G.provs;
-  const sig = provs.map(p => p.owner + ':' + p.controller).join(',') + '|' + (vis ? [...vis].sort((a, b) => a - b).join(',') : '');
+  const warSig = Object.keys(G.wars).sort().join(',');
+  const sig = provs.map(p => p.owner + ':' + p.controller).join(',') + '|' + warSig + '|' + (vis ? [...vis].sort((a, b) => a - b).join(',') : '');
   if (sig === m.styleSig) return;       // 소유·점령·시야가 그대로면 다시 굽지 않는다
   m.styleSig = sig; m.cacheDirty = true;
   const style = (rgb, p, fog) => {
@@ -286,14 +287,16 @@ function updateMapStyle(G, vis) {
     m.fill[p.id] = style(p.owner >= 0 ? G.countries[p.owner].color : [120, 120, 120], p, fog);
     m.occ[p.id] = p.controller >= 0 && p.controller !== p.owner ? style(G.countries[p.controller].color, p, fog) : null;
   }
-  const ownSig = provs.map(p => p.owner).join(',');
+  const ownSig = provs.map(p => p.owner).join(',') + '|' + warSig;
   if (ownSig !== m.ownSig) {
-    m.ownSig = ownSig; m.bProv = new Path2D(); m.bOwn = new Path2D();
+    m.ownSig = ownSig; m.bProv = new Path2D(); m.bOwn = new Path2D(); m.bWar = new Path2D();
     for (const p of provs) {
       if (!p.land) continue;
       for (const e of p.edges) {
         if (e.nb <= p.id || !provs[e.nb].land) continue;
-        pathOf(e.pts, provs[e.nb].owner === p.owner ? m.bProv : m.bOwn);
+        const q = provs[e.nb];
+        if (q.owner === p.owner) pathOf(e.pts, m.bProv);
+        else pathOf(e.pts, p.owner >= 0 && q.owner >= 0 && atWar(G, p.owner, q.owner) ? m.bWar : m.bOwn);   // 교전 중인 국경은 빨간선
       }
     }
   }
@@ -345,6 +348,8 @@ function drawStatic(ctx, G, z) {
   ctx.strokeStyle = 'rgba(0,0,0,0.26)'; ctx.lineWidth = 1 / z; ctx.stroke(m.bProv);
   ctx.strokeStyle = 'rgba(8,10,18,0.9)'; ctx.lineWidth = 3.2 / z; ctx.stroke(m.bOwn);
   ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.lineWidth = 1 / z; ctx.stroke(m.bOwn);
+  ctx.strokeStyle = 'rgba(40,6,6,0.95)'; ctx.lineWidth = 4.6 / z; ctx.stroke(m.bWar);
+  ctx.strokeStyle = 'rgba(255,84,64,0.98)'; ctx.lineWidth = 2.4 / z; ctx.stroke(m.bWar);
   ctx.strokeStyle = 'rgba(6,22,38,0.95)'; ctx.lineWidth = 1.8 / z; ctx.stroke(m.coast);
 }
 
