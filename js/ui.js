@@ -38,10 +38,7 @@ const fitCamera = () => centerOn(MAP_W / 2, MAP_H / 2, minZ);
 const toWorld = (sx, sy) => ({ x: sx / cam.z + cam.x, y: sy / cam.z + cam.y });
 function provAt(sx, sy) {
   const w = toWorld(sx, sy);
-  const gx = Math.floor(w.x / RES), gy = Math.floor(w.y / RES);
-  if (!G || gx < 0 || gy < 0 || gx >= GW || gy >= GH) return -1;
-  const id = G.map.idmap[gy * GW + gx];
-  return G.provs[id].land ? id : -1;
+  return G ? findProvince(G.map, w.x, w.y) : -1;
 }
 // 시야 밖이면 적 정보를 숨긴다
 const canSee = pid => !G.vis || G.vis.has(pid);
@@ -128,7 +125,7 @@ function handleTap(sx, sy) {
   if (phase === 'pick') { if (G.provs[id].owner >= 0) pickCountry(G.provs[id].owner); return; }
   if (phase !== 'play') return;
   if (moveMode) { moveMode = false; orderMove(id); panelDirty = true; return; }
-  selProv = id; selectOwnArmies(); G.dirty = true; panelDirty = true;
+  selProv = id; selectOwnArmies(); panelDirty = true;
 }
 
 // ---------- 입력: 포인터(마우스/터치 공통) ----------
@@ -171,7 +168,7 @@ canvas.addEventListener('pointermove', e => {
   }
   if (e.pointerType === 'mouse') {
     const h = provAt(e.clientX, e.clientY);
-    if (h !== hover) { hover = h; G.dirty = true; }
+    if (h !== hover) hover = h;
   }
 });
 function endPointer(e) {
@@ -342,18 +339,12 @@ function draw() {
   if (!G) return;
   if (G.dirty) {
     G.vis = phase === 'play' ? visibleSet(G, G.player) : null;
-    renderMapImage(G, phase === 'play' || phase === 'pick' ? hover : -1, selProv, G.vis);
+    updateMapStyle(G, G.vis);
     G.dirty = false;
   }
   ctx.setTransform(dpr * cam.z, 0, 0, dpr * cam.z, -cam.x * cam.z * dpr, -cam.y * cam.z * dpr);
-  ctx.imageSmoothingEnabled = true;
-  ctx.drawImage(G.map.canvas, 0, 0, MAP_W, MAP_H);
+  drawMap(ctx, G, cam.z, phase === 'play' || phase === 'pick' ? hover : -1, selProv);
 
-  // 지형 기호
-  if (cam.z > 1.2) {
-    ctx.font = '12px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = 'rgba(0,0,0,.35)';
-    for (const p of G.provs) if (p.land && TERRAIN[p.terrain].glyph) ctx.fillText(TERRAIN[p.terrain].glyph, p.x + 14, p.y - 12);
-  }
   // 국가명
   if (cam.z < 2.5) {
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = 'bold 22px sans-serif'; ctx.lineJoin = 'round';

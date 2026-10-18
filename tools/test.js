@@ -14,6 +14,17 @@ test('지도 생성은 시드에 대해 결정적이며 지형이 섞여 있다'
   assert.ok(kinds.size >= 4, 'terrain variety: ' + [...kinds]);
 });
 
+test('지역 다각형이 지도를 빈틈없이 덮고 클릭 판정이 맞다', () => {
+  const m = A.generateMap(4);
+  const area = poly => Math.abs(poly.reduce((s, p, i) => { const q = poly[(i + 1) % poly.length]; return s + p.x * q.y - q.x * p.y; }, 0)) / 2;
+  const total = m.provs.reduce((s, p) => s + area(p.base), 0);
+  assert.ok(Math.abs(total - 1200 * 700) < 1, 'cells tile map: ' + total);
+  for (const p of m.provs.filter(q => q.land)) {
+    assert.strictEqual(A.findProvince(m, p.x, p.y), p.id, p.name + ' centroid hit');
+    for (const n of p.adj) assert.ok(m.provs[n].adj.includes(p.id), 'adjacency symmetric');
+  }
+});
+
 test('시뮬레이션이 결정적이다', () => {
   const x = A.newGame(3, 6), y = A.newGame(3, 6);
   run(x, 200); run(y, 200);
