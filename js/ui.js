@@ -216,8 +216,11 @@ $('panel').addEventListener('click', e => {
   const me = G.countries[G.player], p = selProv >= 0 ? G.provs[selProv] : null;
   const other = p ? p.owner : -1;
   switch (b.dataset.act) {
-    case 'train': if (me.queue.length < MAX_LINES) me.queue.push({ type: b.dataset.type, progress: 0 }); break;
-    case 'rmline': me.queue.splice(+b.dataset.i, 1); break;
+    case 'train': addTrainLine(G, G.player, b.dataset.type); break;
+    case 'rmline': removeLine(G, G.player, +b.dataset.i); break;
+    case 'alloc': setAlloc(G, G.player, b.dataset.eq, +b.dataset.d); break;
+    case 'build': { const r = queueBuild(G, G.player, selProv, b.dataset.kind); banner(r.msg, 2200); break; }
+    case 'cancelbuild': cancelBuild(G, G.player, +b.dataset.i); break;
     case 'war': if (!declareWar(G, G.player, other)) banner('휴전 기간이거나 동맹국이라 선전포고할 수 없습니다', 2000); break;
     case 'peace': banner(proposePeace(G, G.player, other, false).msg, 2500); break;
     case 'demand': banner(proposePeace(G, G.player, other, true).msg, 3000); break;
@@ -257,7 +260,7 @@ function syncTop() {
   if (G.player >= 0) {
     const me = G.countries[G.player];
     const divs = G.armies.filter(a => a.owner === me.id).reduce((s, a) => s + a.hp, 0);
-    $('pp').innerHTML = `${sw(me)}${esc(me.name)} · PP <b>${me.pp.toFixed(0)}</b> (+${me.income.toFixed(1)}) · 인력 <b>${me.manpower.toFixed(0)}k</b> · 사단 ${divs.toFixed(1)}`;
+    $('pp').innerHTML = `${sw(me)}${esc(me.name)} · PP <b>${me.pp.toFixed(0)}</b> · 보병장비 <b>${me.equip.small.toFixed(0)}</b> · 전차 <b>${me.equip.tank.toFixed(0)}</b> · 인력 <b>${me.manpower.toFixed(0)}k</b> · 사단 ${divs.toFixed(1)}`;
     const w = warsOf(G, me.id);
     $('wars').textContent = w.length ? '⚔ ' + w.map(i => G.countries[i].name).join(', ') : '';
   }
@@ -271,18 +274,38 @@ function renderPanel() {
   let h = `<h2>${sw(me)}${esc(me.name)}${factionTag(me)}</h2>`;
   h += `<div class="dim">영토 ${ownedCount(G, me.id)} / ${G.landCount} · 승리: 60% 점령 또는 동맹 통일</div>`;
   const divs = G.armies.filter(a => a.owner === me.id).reduce((s, a) => s + a.hp, 0);
-  h += `<div class="stat">PP <b>${me.pp.toFixed(0)}</b> (+${me.income.toFixed(1)}) · 인력 <b>${me.manpower.toFixed(0)}k</b> · 사단 ${divs.toFixed(1)}</div>`;
+  h += `<div class="stat">PP <b>${me.pp.toFixed(0)}</b> (+${me.income.toFixed(1)}/일) · 인력 <b>${me.manpower.toFixed(0)}k</b> · 사단 ${divs.toFixed(1)}</div>`;
   const w = warsOf(G, me.id);
   if (w.length) h += `<div class="warn">⚔ ${w.map(i => esc(G.countries[i].name)).join(', ')}</div>`;
   if (me.faction >= 0) h += `<div class="row"><button data-act="leave">동맹 탈퇴</button></div>`;
 
-  h += `<h3>생산 라인 (반복)</h3>`;
+  // 공장 · 장비
+  const fac = me.fac, allocated = me.alloc.small + me.alloc.tank;
+  h += `<h3>공장</h3><div class="dim">민수 <b>${fac.civ}</b> (PP +${me.income.toFixed(1)}/일) · 군수 <b>${fac.mil}</b> (할당 ${allocated}/${fac.mil})</div>`;
+  for (const [k, e] of Object.entries(EQUIP)) {
+    h += `<div class="alloc"><span>${e.name} <b>${me.alloc[k]}</b>개 공장 → +${me.eqRate[k].toFixed(1)}/일 · 비축 <b>${me.equip[k].toFixed(0)}</b></span>`
+      + `<span><button data-act="alloc" data-eq="${k}" data-d="-1" ${me.alloc[k] > 0 ? '' : 'disabled'}>−</button><button data-act="alloc" data-eq="${k}" data-d="1" ${allocated < fac.mil ? '' : 'disabled'}>+</button></span></div>`;
+  }
+  if (me.construction.length) {
+    h += `<div class="dim" style="margin-top:6px">건설 중</div>`;
+    me.construction.forEach((j, i) => {
+      h += `<div class="dim">${j.kind === 'civ' ? '민수' : '군수'} 공장 · ${esc(G.provs[j.prov].name)} · ${i < MAX_BUILD ? '' : '대기 · '}${(j.progress / FACTORY_COST * 100).toFixed(0)}% <a href="#" data-act="cancelbuild" data-i="${i}" onclick="return false">[취소]</a></div><div class="bar"><i style="width:${j.progress / FACTORY_COST * 100}%"></i></div>`;
+    });
+  }
+  h += `<div class="dim">공장은 지역을 선택해 건설합니다 (${FACTORY_COST} PP).</div>`;
+
+  // 사단 훈련 (반복)
+  h += `<h3>사단 훈련 (반복)</h3>`;
+  const stallText = { small: '보병장비 부족', tank: '전차 부족', mp: '인력 부족', slot: '대기' };
   me.queue.forEach((q, i) => {
-    const u = UNITS[q.type], stalled = q.progress >= u.pp - 1e-6 && me.manpower < u.mp;
-    h += `<div class="dim">${u.name} · ${i < MAX_PARALLEL ? '진행' : '대기'} ${(q.progress / u.pp * 100).toFixed(0)}%${stalled ? ' <span class="warn">인력 부족</span>' : ''} <a href="#" data-act="rmline" data-i="${i}" onclick="return false">[삭제]</a></div><div class="bar"><i style="width:${q.progress / u.pp * 100}%"></i></div>`;
+    const u2 = UNITS[q.type], days = TRAIN_DAYS[q.type];
+    const state = q.started ? `훈련 ${q.progress}/${days}일` : `<span class="warn">${stallText[q.stall] || '대기'}</span>`;
+    h += `<div class="dim">${u2.name} · ${state} <a href="#" data-act="rmline" data-i="${i}" onclick="return false">[삭제]</a></div><div class="bar"><i style="width:${q.started ? q.progress / days * 100 : 0}%"></i></div>`;
   });
-  h += `<div class="row">` + Object.entries(UNITS).map(([t, u]) => `<button data-act="train" data-type="${t}" ${me.queue.length >= MAX_LINES ? 'disabled' : ''} title="PP ${u.pp} · 인력 ${u.mp}k">+${u.name}</button>`).join('') + `</div>`;
-  if (!me.queue.length) h += `<div class="dim">라인이 없으면 PP가 쌓이기만 합니다.</div>`;
+  const costText = u2 => Object.entries(u2.eq).map(([k, v]) => `${EQUIP[k].name} ${v}`).join(' · ') + ` · 인력 ${u2.mp}k`;
+  h += `<div class="row">` + Object.entries(UNITS).map(([t, u2]) => `<button data-act="train" data-type="${t}" ${me.queue.length >= MAX_LINES ? 'disabled' : ''} title="${costText(u2)} · ${TRAIN_DAYS[t]}일">+${u2.name}</button>`).join('') + `</div>`;
+  h += `<div class="dim">${Object.entries(UNITS).map(([t, u2]) => `${u2.name}: ${costText(u2)}`).join('<br>')}</div>`;
+  if (!me.queue.length) h += `<div class="warn">훈련 라인이 없으면 사단이 편성되지 않습니다.</div>`;
 
   const myFronts = G.fronts.filter(f => f.owner === me.id);
   if (myFronts.length) {
@@ -306,7 +329,12 @@ function renderPanel() {
     const T = TERRAIN[p.terrain];
     h += `<h3>지역</h3><b>${esc(p.name)}</b>${owner && owner.capital === p.id ? ' ★수도' : ''}<br>`;
     h += `<span class="dim">소유: ${owner ? sw(owner) + esc(owner.name) : '중립'}${ctl && ctl !== owner ? ` · <span class="warn">${esc(ctl.name)} 점령</span>` : ''}</span><br>`;
-    h += `<span class="dim">지형: ${T.name} (이동 ×${T.move}, 방어 ×${T.def}) · 산업 ${p.industry}</span>`;
+    h += `<span class="dim">지형: ${T.name} (이동 ×${T.move}, 방어 ×${T.def}) </span>`;
+    if (p.land && p.owner === me.id) {
+      const free = freeSlots(me, p), mine = p.controller === me.id;
+      h += `<br><span class="dim">공장: 민수 ${p.civ} · 군수 ${p.mil} / 슬롯 ${p.slots}${mine ? '' : ' <span class="warn">(점령당해 생산 중단)</span>'}</span>`;
+      if (mine) h += `<div class="row"><button data-act="build" data-kind="civ" ${free > 0 ? '' : 'disabled'}>+민수 공장</button><button data-act="build" data-kind="mil" ${free > 0 ? '' : 'disabled'}>+군수 공장</button></div>`;
+    }
     const mine = G.armies.filter(a => a.prov === p.id && a.owner === me.id);
     if (mine.length) {
       h += `<h3>내 사단</h3>`;
@@ -380,6 +408,22 @@ function drawFronts() {
   }
 }
 
+// 내 지역의 공장 수 (확대했을 때만): 파랑=민수, 주황=군수
+function drawFactories() {
+  if (cam.z < 1.2 || G.player < 0) return;
+  ctx.font = 'bold 8px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const box = (x, y, color, n) => {
+    ctx.fillStyle = color; ctx.fillRect(x, y, 11, 8); ctx.strokeStyle = '#101820'; ctx.lineWidth = 0.8; ctx.strokeRect(x, y, 11, 8);
+    ctx.fillStyle = '#fff'; ctx.fillText(n, x + 5.5, y + 4.4);
+  };
+  for (const p of G.provs) {
+    if (!p.land || p.controller !== G.player || p.owner !== G.player || !(p.civ + p.mil)) continue;
+    let y = p.y - 8;
+    if (p.civ) { box(p.x - 28, y, '#3b8fe0', p.civ); y += 9; }
+    if (p.mil) box(p.x - 28, y, '#e8862e', p.mil);
+  }
+}
+
 // 이동 화살표 머리
 function arrowHead(from, to, size) {
   const ang = Math.atan2(to.y - from.y, to.x - from.x);
@@ -403,6 +447,7 @@ function draw() {
   ctx.setTransform(dpr * cam.z, 0, 0, dpr * cam.z, -cam.x * cam.z * dpr, -cam.y * cam.z * dpr);
   drawMap(ctx, G, cam.z, phase === 'play' || phase === 'pick' ? hover : -1, selProv);
   drawFronts();
+  drawFactories();
 
   // 국가명
   if (cam.z < 2.5) {

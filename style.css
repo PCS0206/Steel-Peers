@@ -60,3 +60,8 @@ button.on-mode { background:var(--accent); color:#1a1305; }
 .front { border:1px solid var(--line); border-radius:6px; padding:6px 8px; margin:6px 0; background:#1a2a3a; }
 .front.sel { border-color:var(--accent); }
 .front .row button { padding:3px 7px; font-size:12px; }
+
+.alloc { display:flex; justify-content:space-between; align-items:center; gap:6px; margin:3px 0; font-size:13px; }
+.alloc > span:first-child { flex:1; min-width:0; }
+.alloc > span:last-child { display:flex; gap:4px; flex:none; }
+.alloc button { width:26px; padding:1px 0; font-weight:700; }

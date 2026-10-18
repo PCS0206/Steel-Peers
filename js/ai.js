@@ -2,7 +2,8 @@
 // AI 국가: 생산 → (주기적) 외교 → 유휴 사단에 목표 부여. AI는 안개의 영향을 받지 않는다.
 
 function aiTick(G, c) {
-  while (c.queue.length < 3) c.queue.push({ type: aiLineType(G, c), progress: 0 });
+  aiEconomy(G, c);
+  while (c.queue.length < 3) c.queue.push({ type: aiLineType(G, c), progress: 0, started: false });
   mergeIdle(G, c.id);
   if ((G.day + c.id * 3) % 10 === 0) aiDiplomacy(G, c);
   for (const a of G.armies) if (a.owner === c.id && !a.path.length) aiOrder(G, c, a);
@@ -14,6 +15,22 @@ function aiLineType(G, c) {
   const own = G.provs.filter(p => p.owner === c.id);
   const rough = own.filter(p => p.terrain === 'mountain' || p.terrain === 'hills').length / own.length;
   return rough > 0.3 ? 'mtn' : 'arm';
+}
+
+// 장비 할당(보병장비:전차 ≈ 65:35, 비축이 한쪽에 쏠리면 반대쪽으로)과 공장 건설(민수:군수 ≈ 1.2:1)
+function aiEconomy(G, c) {
+  const mil = (c.fac || factoriesOf(G, c.id)).mil;
+  let share = 0.65;
+  if (c.equip.small > c.equip.tank * 4 + 80) share = 0.35;
+  else if (c.equip.tank > c.equip.small + 100) share = 0.85;
+  const small = Math.round(mil * share);
+  c.alloc = { small, tank: mil - small };
+
+  if (c.construction.length < 2 && c.pp >= FACTORY_COST * 0.5) {
+    const spots = G.provs.filter(p => p.land && p.owner === c.id && p.controller === c.id && freeSlots(c, p) > 0)
+      .sort((a, b) => b.industry - a.industry);
+    if (spots.length) queueBuild(G, c.id, spots[0].id, c.fac.civ < c.fac.mil * 1.2 ? 'civ' : 'mil');
+  }
 }
 
 function mergeIdle(G, owner) {

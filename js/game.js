@@ -8,13 +8,13 @@ const MAX_FACTION = 3;    // 동맹 최대 인원
 const TRUCE_DAYS = 40;
 const START_YEAR = 1936;
 const SUPPLY_RANGE = 2;   // 아군 지배 지역에서 이만큼 떨어진 곳까지 보급
-const SAVE_VERSION = 1;
+const SAVE_VERSION = 2;
 
-// 사단 종류. pp=생산비용, mp=인력(천 명), terr=지형별 공격·방어 보정
+// 사단 종류. eq=훈련에 드는 장비, mp=인력(천 명), terr=지형별 공격·방어 보정
 const UNITS = {
-  inf: { name: '보병', pp: 60, mp: 8, atk: 1, def: 1.1, speed: 1, terr: {} },
-  arm: { name: '기갑', pp: 120, mp: 6, atk: 1.9, def: 0.9, speed: 1.7, terr: { forest: 0.6, hills: 0.7, mountain: 0.4, marsh: 0.5 } },
-  mtn: { name: '산악보병', pp: 85, mp: 8, atk: 1, def: 1.1, speed: 1, terr: { hills: 1.3, mountain: 1.5 } },
+  inf: { name: '보병', eq: { small: 40 }, mp: 8, atk: 1, def: 1.1, speed: 1, terr: {} },
+  arm: { name: '기갑', eq: { tank: 25 }, mp: 6, atk: 1.9, def: 0.9, speed: 1.7, terr: { forest: 0.6, hills: 0.7, mountain: 0.4, marsh: 0.5 } },
+  mtn: { name: '산악보병', eq: { small: 40 }, mp: 8, atk: 1, def: 1.1, speed: 1, terr: { hills: 1.3, mountain: 1.5 } },
 };
 const unitMod = (type, terrain) => UNITS[type].terr[terrain] ?? 1;
 
@@ -66,7 +66,7 @@ function newGame(seed, nCountries) {
   }
   caps.forEach((cap, i) => {
     const def = COUNTRY_DEFS[i % COUNTRY_DEFS.length];
-    G.countries.push({ id: i, name: def.name, color: def.color, capital: cap.id, pp: 60, manpower: 40, income: 0, queue: [], alive: true, ai: true, faction: -1 });
+    G.countries.push({ id: i, name: def.name, color: def.color, capital: cap.id, pp: 100, manpower: 40, income: 0, equip: { small: 80, tank: 30 }, alloc: { small: 0, tank: 0 }, eqRate: { small: 0, tank: 0 }, fac: { civ: 0, mil: 0 }, construction: [], queue: [], alive: true, ai: true, faction: -1 });
     cap.owner = i;
   });
 
@@ -84,8 +84,9 @@ function newGame(seed, nCountries) {
     p.industry = r < 0.4 ? 0 : r < 0.75 ? 1 : r < 0.95 ? 2 : 3;
     p.controller = p.owner;
   }
+  for (const c of G.countries) G.provs[c.capital].industry += 3;
+  initEconomy(G);
   for (const c of G.countries) {
-    G.provs[c.capital].industry += 3;
     const own = land.filter(p => p.owner === c.id);
     spawnArmy(G, c.id, c.capital, 'inf'); spawnArmy(G, c.id, c.capital, 'inf'); spawnArmy(G, c.id, c.capital, 'arm');
     for (let i = 0; i < 2; i++) spawnArmy(G, c.id, own[Math.floor(rnd() * own.length)].id, 'inf');
@@ -314,28 +315,6 @@ function tickDay(G) {
   checkVictory(G);
 }
 
-function economy(G) {
-  for (const c of G.countries) {
-    if (!c.alive) continue;
-    c.income = 1 + G.provs.reduce((s, p) => s + (p.owner === c.id && p.controller === c.id ? p.industry : 0), 0) * 0.25;
-    c.pp = Math.min(500, c.pp + c.income);
-    c.manpower = Math.min(150, c.manpower + 0.08 * controlledCount(G, c.id));
-    let active = 0;
-    for (const q of c.queue) {
-      if (active++ >= MAX_PARALLEL) break;
-      const u = UNITS[q.type];
-      const spend = Math.min(u.pp / 15, c.pp, u.pp - q.progress);
-      q.progress += spend; c.pp -= spend;
-      if (q.progress >= u.pp - 1e-6 && c.manpower >= u.mp) {   // 인력이 모자라면 완성 대기
-        c.manpower -= u.mp; q.progress = 0;
-        const home = G.provs[c.capital].controller === c.id ? c.capital : nearestControlled(G, c.capital, c.id);
-        spawnArmy(G, c.id, home, q.type);
-        if (c.id === G.player) addLog(G, `새 ${UNITS[q.type].name} 사단이 편성되었다.`, c.id);
-      }
-    }
-  }
-}
-
 // 지형·속도를 반영한 이동 일수 (구성 중 가장 느린 사단 기준)
 function moveDays(G, a, provId) {
   const tm = TERRAIN[G.provs[provId].terrain].move;
@@ -417,7 +396,7 @@ function occupy(G, p, who) {
   const oc = G.countries[old];
   if (p.owner === old && p.id === oc.capital) {
     addLog(G, `${josa(G.countries[who].name, '이/가')} ${oc.name}의 수도 ${josa(p.name, '을/를')} 점령했다!`, who);
-    const rest = G.provs.filter(q => q.land && q.controller === old).sort((a, b) => b.industry - a.industry)[0];
+    const rest = G.provs.filter(q => q.land && q.controller === old).sort((a, b) => (b.civ + b.mil) - (a.civ + a.mil))[0];
     if (rest) oc.capital = rest.id;
   } else if (who === G.player || old === G.player || p.owner === G.player) {
     addLog(G, `${p.name}: ${G.countries[who].name}, ${G.countries[old].name}에게서 점령`, who);
@@ -428,7 +407,7 @@ function occupy(G, p, who) {
 function capitulate(G, id) {
   const c = G.countries[id];
   for (const p of G.provs) if (p.land && p.owner === id && p.controller >= 0) p.owner = p.controller;
-  c.alive = false; c.queue = []; c.faction = -1;
+  c.alive = false; c.queue = []; c.construction = []; c.faction = -1;
   G.armies = G.armies.filter(a => a.owner !== id);
   for (const k of Object.keys(G.wars)) if (k.split('-').map(Number).includes(id)) delete G.wars[k];
   G.dirty = true;
@@ -460,7 +439,7 @@ function serialize(G) {
   return JSON.parse(JSON.stringify({
     v: SAVE_VERSION, seed: G.seed, nCountries: G.nCountries, day: G.day, player: G.player, nextArmyId: G.nextArmyId,
     countries: G.countries, armies: G.armies, wars: G.wars, truces: G.truces, factions: G.factions, nextFaction: G.nextFaction, fronts: G.fronts, nextFront: G.nextFront,
-    log: G.log.slice(-60), over: G.over, landCount: G.landCount, provs: G.provs.map(p => [p.owner, p.controller, p.industry]),
+    log: G.log.slice(-60), over: G.over, landCount: G.landCount, provs: G.provs.map(p => [p.owner, p.controller, p.industry, p.civ, p.mil]),
   }));
 }
 
@@ -471,7 +450,7 @@ function deserialize(d) {
     nCountries: d.nCountries, day: d.day, player: d.player, nextArmyId: d.nextArmyId, countries: d.countries, armies: d.armies,
     wars: d.wars, truces: d.truces, factions: d.factions, nextFaction: d.nextFaction, fronts: d.fronts || [], nextFront: d.nextFront || 1, log: d.log, over: d.over, landCount: d.landCount,
   });
-  d.provs.forEach(([owner, controller, industry], i) => Object.assign(G.provs[i], { owner, controller, industry }));
+  d.provs.forEach(([owner, controller, industry, civ, mil], i) => Object.assign(G.provs[i], { owner, controller, industry, civ, mil, slots: industry + SLOT_BONUS }));
   computeSupply(G);
   return G;
 }

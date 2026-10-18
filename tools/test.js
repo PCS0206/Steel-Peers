@@ -166,4 +166,104 @@ test('전선: 저장/불러오기 후에도 같은 결과', () => {
   assert.strictEqual(snap(x), snap(z));
 });
 
+// ---------- 경제: 공장 / 장비 / 훈련 ----------
+const fresh = () => { const G = A.newGame(2, 6); G.player = 0; G.countries[0].ai = false; G.countries[0].queue = []; return G; };
+
+test('경제: 시작 공장 분배와 장비 할당이 일관된다', () => {
+  const G = A.newGame(2, 6);
+  for (const c of G.countries) {
+    const f = A.factoriesOf(G, c.id);
+    assert.ok(f.civ > 0 && f.mil > 0, c.name + ' has both factory kinds');
+    assert.strictEqual(c.alloc.small + c.alloc.tank, f.mil, 'all military factories allocated');
+  }
+  for (const p of G.provs.filter(q => q.land)) assert.ok(p.civ + p.mil <= p.slots && p.civ >= 0 && p.mil >= 0);
+});
+
+test('경제: 군수 공장 할당만큼 장비가, 민수 공장만큼 PP가 쌓인다', () => {
+  const G = fresh(), c = G.countries[0];
+  const { civ, mil } = A.factoriesOf(G, 0), s0 = c.equip.small, t0 = c.equip.tank, p0 = c.pp;
+  A.tickDay(G);
+  assert.ok(Math.abs(c.equip.small - s0 - c.alloc.small * A.EQUIP.small.out) < 1e-9);
+  assert.ok(Math.abs(c.equip.tank - t0 - c.alloc.tank * A.EQUIP.tank.out) < 1e-9);
+  assert.ok(Math.abs(c.pp - p0 - (1 + 0.6 * civ)) < 1e-9, 'pp income from civilian factories');
+  assert.ok(mil > 0);
+});
+
+test('경제: 할당 조정은 군수 공장 수를 넘지 못한다', () => {
+  const G = fresh(), c = G.countries[0], { mil } = A.factoriesOf(G, 0);
+  assert.ok(!A.setAlloc(G, 0, 'small', +1), '이미 전부 할당됨');
+  const had = c.alloc.tank;
+  assert.ok(A.setAlloc(G, 0, 'tank', -1));
+  assert.ok(A.setAlloc(G, 0, 'small', +1));
+  assert.strictEqual(c.alloc.tank, had - 1);
+  assert.strictEqual(c.alloc.small + c.alloc.tank, mil);
+  c.alloc.small = c.alloc.tank = 0;
+  assert.ok(!A.setAlloc(G, 0, 'tank', -1));
+});
+
+test('경제: 사단 훈련은 장비·인력을 쓰고 정해진 일수 뒤 편성된다', () => {
+  const G = fresh(), c = G.countries[0];
+  assert.ok(A.addTrainLine(G, 0, 'inf'));
+  const armies0 = G.armies.filter(a => a.owner === 0).length, eq0 = c.equip.small, mp0 = c.manpower;
+  A.tickDay(G);
+  const q = c.queue[0];
+  assert.ok(q.started, 'started the first day');
+  assert.ok(c.equip.small < eq0 + c.eqRate.small, 'equipment spent');
+  assert.ok(c.manpower < mp0 + 0.08 * 40, 'manpower spent');
+  for (let i = 0; i < A.TRAIN_DAYS.inf - 1; i++) A.tickDay(G);
+  assert.strictEqual(G.armies.filter(a => a.owner === 0).length, armies0, '아직 훈련 중');
+  A.tickDay(G);   // 시작한 날 + TRAIN_DAYS일째에 편성
+  assert.strictEqual(G.armies.filter(a => a.owner === 0).length, armies0 + 1, 'division spawned after training');
+  assert.ok(!q.started, 'line repeats');
+});
+
+test('경제: 장비가 없으면 훈련이 대기하고, 라인 삭제 시 환급된다', () => {
+  const G = fresh(), c = G.countries[0];
+  c.equip.small = 0; c.alloc.small = 0; c.alloc.tank = 0;   // 생산도 끊어 둔다
+  A.addTrainLine(G, 0, 'inf');
+  for (let i = 0; i < 5; i++) A.tickDay(G);
+  assert.strictEqual(c.queue[0].stall, 'small');
+  assert.ok(!c.queue[0].started);
+  c.equip.small = 100; A.tickDay(G);
+  assert.ok(c.queue[0].started);
+  const eq = c.equip.small, mp = c.manpower;
+  A.removeLine(G, 0, 0);
+  assert.strictEqual(c.equip.small, eq + A.UNITS.inf.eq.small);
+  assert.strictEqual(c.manpower, mp + A.UNITS.inf.mp);
+});
+
+test('경제: 공장 건설은 PP를 쓰고 완공되며 슬롯을 넘지 못한다', () => {
+  const G = fresh(), c = G.countries[0];
+  const p = G.provs.find(q => q.owner === 0 && q.civ + q.mil < q.slots);
+  const before = p.mil;
+  assert.ok(A.queueBuild(G, 0, p.id, 'mil').ok);
+  for (let i = 0; i < 25 && c.construction.length; i++) A.tickDay(G);
+  assert.strictEqual(p.mil, before + 1, 'factory completed');
+  assert.strictEqual(c.construction.length, 0);
+  while (A.freeSlots(c, p) > 0) assert.ok(A.queueBuild(G, 0, p.id, 'civ').ok);
+  assert.ok(!A.queueBuild(G, 0, p.id, 'civ').ok, 'no free slot');
+  assert.ok(!A.queueBuild(G, 0, G.provs.find(q => q.owner === 1).id, 'civ').ok, 'not my province');
+});
+
+test('경제: 지역을 점령당하면 그 공장이 생산에서 빠진다', () => {
+  const G = fresh();
+  const before = A.factoriesOf(G, 0);
+  const p = G.provs.filter(q => q.owner === 0 && q.civ + q.mil > 0)[0];
+  p.controller = 1;
+  const after = A.factoriesOf(G, 0);
+  assert.strictEqual(before.civ + before.mil - after.civ - after.mil, p.civ + p.mil);
+  A.tickDay(G);
+  const c = G.countries[0];
+  assert.strictEqual(c.alloc.small + c.alloc.tank <= after.mil, true, 'allocation clamped');
+});
+
+test('경제: AI가 공장을 늘린다', () => {
+  const G = A.newGame(3, 6);
+  const total = id => { const f = A.factoriesOf(G, id); return f.civ + f.mil; };
+  const start = G.countries.map(c => total(c.id));
+  for (let i = 0; i < 200; i++) A.tickDay(G);
+  const grew = G.countries.filter((c, i) => c.alive && total(c.id) > start[i]).length;
+  assert.ok(grew >= 3, `countries that built factories: ${grew}`);
+});
+
 console.log(`${n} tests passed`);
