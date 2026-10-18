@@ -2,6 +2,7 @@
 const assert = require('assert');
 const { loadGame } = require('./load');
 const A = loadGame();
+const allocSum = c => Object.values(c.alloc).reduce((s, v) => s + v, 0);
 let n = 0;
 const test = (name, fn) => { fn(); n++; console.log('  ok', name); };
 const run = (G, days) => { for (let i = 0; i < days && !G.over; i++) A.tickDay(G); };
@@ -174,7 +175,7 @@ test('경제: 시작 공장 분배와 장비 할당이 일관된다', () => {
   for (const c of G.countries) {
     const f = A.factoriesOf(G, c.id);
     assert.ok(f.civ > 0 && f.mil > 0, c.name + ' has both factory kinds');
-    assert.strictEqual(c.alloc.small + c.alloc.tank, f.mil, 'all military factories allocated');
+    assert.strictEqual(allocSum(c), f.mil, 'all military factories allocated');
   }
   for (const p of G.provs.filter(q => q.land)) assert.ok(p.civ + p.mil <= p.slots && p.civ >= 0 && p.mil >= 0);
 });
@@ -185,6 +186,7 @@ test('경제: 군수 공장 할당만큼 장비가, 민수 공장만큼 PP가 �
   A.tickDay(G);
   assert.ok(Math.abs(c.equip.small - s0 - c.alloc.small * A.EQUIP.small.out) < 1e-9);
   assert.ok(Math.abs(c.equip.tank - t0 - c.alloc.tank * A.EQUIP.tank.out) < 1e-9);
+  assert.ok(c.alloc.gun === 0 || c.eqRate.gun > 0, '야포도 생산된다');
   assert.ok(Math.abs(c.pp - p0 - (1 + 0.6 * civ)) < 1e-9, 'pp income from civilian factories');
   assert.ok(mil > 0);
 });
@@ -196,8 +198,8 @@ test('경제: 할당 조정은 군수 공장 수를 넘지 못한다', () => {
   assert.ok(A.setAlloc(G, 0, 'tank', -1));
   assert.ok(A.setAlloc(G, 0, 'small', +1));
   assert.strictEqual(c.alloc.tank, had - 1);
-  assert.strictEqual(c.alloc.small + c.alloc.tank, mil);
-  c.alloc.small = c.alloc.tank = 0;
+  assert.strictEqual(allocSum(c), mil);
+  c.alloc.small = c.alloc.tank = c.alloc.gun = 0;
   assert.ok(!A.setAlloc(G, 0, 'tank', -1));
 });
 
@@ -219,7 +221,7 @@ test('경제: 사단 훈련은 장비·인력을 쓰고 정해진 일수 뒤 편
 
 test('경제: 장비가 없으면 훈련이 대기하고, 라인 삭제 시 환급된다', () => {
   const G = fresh(), c = G.countries[0];
-  c.equip.small = 0; c.alloc.small = 0; c.alloc.tank = 0;   // 생산도 끊어 둔다
+  c.equip.small = 0; c.alloc.small = 0; c.alloc.tank = 0; c.alloc.gun = 0;   // 생산도 끊어 둔다
   A.addTrainLine(G, 0, 'inf');
   for (let i = 0; i < 5; i++) A.tickDay(G);
   assert.strictEqual(c.queue[0].stall, 'small');
@@ -254,7 +256,7 @@ test('경제: 지역을 점령당하면 그 공장이 생산에서 빠진다', (
   assert.strictEqual(before.civ + before.mil - after.civ - after.mil, p.civ + p.mil);
   A.tickDay(G);
   const c = G.countries[0];
-  assert.strictEqual(c.alloc.small + c.alloc.tank <= after.mil, true, 'allocation clamped');
+  assert.strictEqual(allocSum(c) <= after.mil, true, 'allocation clamped');
 });
 
 test('경제: AI가 공장을 늘린다', () => {
@@ -391,6 +393,149 @@ test('전선: 직접 그린 라인·화살표도 저장/불러오기에서 유�
   assert.strictEqual(JSON.stringify(z.fronts), JSON.stringify(G.fronts));
   for (let i = 0; i < 20; i++) { A.tickDay(G); A.tickDay(z); }
   assert.strictEqual(JSON.stringify(A.serialize(G)), JSON.stringify(A.serialize(z)));
+});
+
+// ---------- 사단 설계 / 병과 ----------
+const near = (a, b, e = 1e-9) => Math.abs(a - b) < e;
+
+test('기본 사단은 이전 능력치와 같다 (보병/기갑/산악) + 보병+포병', () => {
+  const U = A.UNITS;
+  assert.ok(near(U.inf.atk, 1) && near(U.inf.def, 1.1) && U.inf.speed === 1 && U.inf.mp === 8 && U.inf.eq.small === 40 && U.inf.days === 10 && U.inf.cls === 'inf');
+  assert.ok(near(U.arm.atk, 1.9) && near(U.arm.def, 0.9) && near(U.arm.speed, 1.7) && U.arm.mp === 6 && U.arm.eq.tank === 25 && U.arm.days === 16 && U.arm.cls === 'arm');
+  assert.ok(near(U.arm.terr.forest, 0.6) && near(U.arm.terr.mountain, 0.4));
+  assert.ok(near(U.mtn.terr.hills, 1.3) && near(U.mtn.terr.mountain, 1.5) && near(U.mtn.rough, 0.5) && U.mtn.days === 12 && U.mtn.cls === 'mtn');
+  assert.ok(U.cmb.eq.small === 32 && U.cmb.eq.gun === 5 && U.cmb.cls === 'inf', '보병 4 + 포병 1');
+  assert.ok(U.cmb.speed < 1, '포병이 섞이면 느려진다');
+});
+
+test('사단 설계: 능력치는 대대 수에 비례하고 지원 중대가 보정을 준다', () => {
+  const G = A.newGame(1, 6);
+  const big = A.designTemplate(G, 0, { name: '대형보병', bn: { inf: 9 } });
+  assert.ok(big.ok, big.msg);
+  const u = A.UNITS[big.tpl.id];
+  assert.ok(near(u.atk, 1.8) && near(u.def, 1.98) && u.eq.small === 72 && u.mp === 14.4 && u.days > A.UNITS.inf.days);
+  assert.ok(A.armyStr({ comp: { [big.tpl.id]: 1 } }) > 1.7 * A.armyStr({ comp: { inf: 1 } }), '9대대는 5대대보다 훨씬 강하다');
+  const sup = A.designTemplate(G, 0, { name: '정찰공병', bn: { inf: 4, tank: 1 }, sup: { recon: 1, eng: 1 } });
+  const s = A.UNITS[sup.tpl.id];
+  assert.ok(near(s.speed, 1 * 1.1), '속도 = 가장 느린 대대(보병 1.0) × 정찰 1.1');
+  assert.ok(s.mp > 4 * 1.6 + 1.2 && s.eq.small > 4 * 8 + 3, '지원 중대 비용이 더해진다');
+  const plain = A.compileTemplate({ name: 'x', bn: { inf: 4, tank: 1 }, sup: {} });
+  assert.ok(s.terr.hills > plain.terr.hills, '공병은 험지 보정을 올린다');
+});
+
+test('사단 설계: 검증 규칙과 삭제 규칙', () => {
+  const G = A.newGame(1, 6);
+  const d = spec => A.designTemplate(G, 0, spec);
+  assert.ok(!d({ name: '', bn: { inf: 3 } }).ok, '이름 없음');
+  assert.ok(!d({ name: '빈', bn: {} }).ok, '대대 없음');
+  assert.ok(!d({ name: '과다', bn: { inf: 10 } }).ok, '대대 9개 초과');
+  assert.ok(!d({ name: '과다지원', bn: { inf: 3 }, sup: { recon: 2, eng: 1 } }).ok, '지원 2개 초과');
+  assert.ok(!d({ name: '음수', bn: { inf: -1, tank: 3 } }).ok, '음수');
+  assert.ok(!d({ name: '보병', bn: { inf: 3 } }).ok, '기본 사단과 같은 이름');
+  const ok = d({ name: '내설계', bn: { inf: 3, art: 2 } });
+  assert.ok(ok.ok); assert.ok(!d({ name: '내설계', bn: { inf: 2 } }).ok, '중복 이름');
+  for (let i = 0; G.templates.length < A.MAX_TEMPLATES; i++) assert.ok(d({ name: '설계' + i, bn: { inf: 1 + (i % 4) } }).ok);
+  assert.ok(!d({ name: '초과', bn: { inf: 1 } }).ok, '최대 개수');
+  // 훈련 라인이 쓰는 설계는 삭제 불가, 정리하면 삭제 가능
+  const c = G.countries[0]; c.queue = [];
+  assert.ok(A.addTrainLine(G, 0, ok.tpl.id));
+  assert.ok(!A.deleteTemplate(G, 0, ok.tpl.id).ok, '라인에서 사용 중');
+  A.removeLine(G, 0, 0);
+  assert.ok(A.deleteTemplate(G, 0, ok.tpl.id).ok);
+  assert.ok(!(ok.tpl.id in A.UNITS), 'UNITS에서도 제거');
+  assert.ok(!A.deleteTemplate(G, 0, 'inf').ok, '기본 사단은 삭제 불가');
+  assert.ok(!A.deleteTemplate(G, 1, G.templates[0].id).ok, '남의 설계는 삭제 불가');
+});
+
+test('사단 설계: 설계한 사단이 훈련·편성되고 야포 장비를 쓴다', () => {
+  const G = A.newGame(2, 6); G.player = 0; G.countries[0].ai = false; G.countries[0].queue = [];
+  const r = A.designTemplate(G, 0, { name: '포병군단', bn: { inf: 2, art: 3 } });
+  const id = r.tpl.id, u = A.UNITS[id], c = G.countries[0];
+  assert.ok(u.eq.gun === 15 && u.eq.small === 16);
+  A.addTrainLine(G, 0, id);
+  const gun0 = c.equip.gun, armies0 = G.armies.filter(a => a.owner === 0).length;
+  A.tickDay(G);
+  assert.ok(c.queue[0].started, '야포·보병장비가 충분하면 시작');
+  assert.ok(c.equip.gun < gun0 + c.eqRate.gun, '야포 소모');
+  for (let i = 0; i < u.days; i++) A.tickDay(G);
+  const made = G.armies.filter(a => a.owner === 0 && a.comp[id] > 0);
+  assert.strictEqual(G.armies.filter(a => a.owner === 0).length, armies0 + 1);
+  assert.ok(made.length === 1, '설계한 구성키로 편성');
+  // 야포가 모자라면 대기
+  c.equip.gun = 0; c.alloc.gun = 0;
+  for (let i = 0; i < 3; i++) A.tickDay(G);
+  const q = c.queue[0]; assert.ok(q.stall === 'gun' || q.started, 'gun stall');
+});
+
+test('사단 설계: 이동은 가장 느린 대대 기준, 산악 대대는 험지 페널티가 작다', () => {
+  const G = A.newGame(1, 6);
+  const plain = G.provs.find(p => p.land && p.terrain === 'plains') || G.provs.find(p => p.land);
+  const mt = G.provs.find(p => p.land && p.terrain === 'mountain') || G.provs.find(p => p.land);
+  plain.terrain = 'plains'; mt.terrain = 'mountain';
+  const mk = (bn, sup = {}) => { const r = A.designTemplate(G, 0, { name: 'm' + G.templates.length, bn, sup }); const a = A.spawnArmy(G, 0, plain.id, r.tpl.id); return a; };
+  const tank = mk({ tank: 5 }), mix = mk({ tank: 3, inf: 2 }), art = mk({ inf: 4, art: 1 }), mtn = mk({ mtn: 5 }), inf = mk({ inf: 5 }), recon = mk({ inf: 5 }, { recon: 1 });
+  assert.ok(A.moveDays(G, tank, plain.id) < A.moveDays(G, mix, plain.id), '보병이 섞이면 전차도 느려진다');
+  assert.strictEqual(A.moveDays(G, mix, plain.id), A.moveDays(G, inf, plain.id));
+  assert.ok(A.moveDays(G, art, plain.id) >= A.moveDays(G, inf, plain.id), '포병은 더 느리다');
+  assert.ok(A.moveDays(G, mtn, mt.id) < A.moveDays(G, inf, mt.id), '산악 대대는 산악에서 더 빠르다');
+  assert.ok(A.moveDays(G, recon, mt.id) <= A.moveDays(G, inf, mt.id), '정찰은 이동을 줄인다');
+});
+
+test('사단 설계: 저장/불러오기와 새 게임에서 설계가 올바르게 관리된다', () => {
+  const G = A.newGame(3, 6);
+  const r = A.designTemplate(G, 0, { name: '저장테스트', bn: { inf: 3, tank: 2 }, sup: { eng: 1 } });
+  A.spawnArmy(G, 0, G.countries[0].capital, r.tpl.id);
+  for (let i = 0; i < 20; i++) A.tickDay(G);
+  const snapStr = JSON.stringify(A.serialize(G));
+  A.newGame(4, 6);                                      // 다른 게임을 만들면 이전 설계는 UNITS에서 사라진다
+  assert.ok(!(r.tpl.id in A.UNITS), 'custom unit cleared on new game');
+  const z = A.deserialize(JSON.parse(snapStr));
+  assert.ok(r.tpl.id in A.UNITS && A.UNITS[r.tpl.id].name === '저장테스트', '불러오면 다시 등록');
+  assert.ok(near(A.UNITS[r.tpl.id].atk, 3 * 0.2 + 2 * 0.38));
+  for (let i = 0; i < 30; i++) { A.tickDay(z); }
+  assert.ok(z.armies.length > 0);
+  A.newGame(3, 6); const w = A.newGame(3, 6);
+  assert.strictEqual(w.templates.length, 0);
+});
+
+// ---------- 난이도 ----------
+test('난이도: 플레이어 시작 자원과 AI 경제 배율이 다르다', () => {
+  const mk = lvl => { const G = A.newGame(5, 6, lvl); A.setPlayer(G, 0); return G; };
+  const easy = mk('easy'), normal = mk('normal'), brutal = mk('brutal');
+  assert.ok(easy.countries[0].pp > normal.countries[0].pp && normal.countries[0].pp > brutal.countries[0].pp, '플레이어 시작 PP');
+  assert.ok(easy.countries[0].equip.small > normal.countries[0].equip.small);
+  for (const G of [easy, normal, brutal]) A.tickDay(G);                      // 첫날: 공장 수가 같으므로 배율이 그대로 드러난다
+  const ai = G => G.countries[3], D = A.DIFFICULTY;
+  assert.ok(near(ai(brutal).income / ai(easy).income, D.brutal.aiEco / D.easy.aiEco, 1e-9), 'AI PP 수입 배율');
+  assert.ok(near(ai(normal).income / ai(easy).income, D.normal.aiEco / D.easy.aiEco, 1e-9));
+  const sumRate = G => Object.values(ai(G).eqRate).reduce((s, v) => s + v, 0);
+  assert.ok(near(sumRate(brutal) / sumRate(easy), D.brutal.aiEco / D.easy.aiEco, 1e-9), 'AI 장비 생산 배율');
+  for (const G of [easy, normal, brutal]) for (let i = 0; i < 29; i++) A.tickDay(G);
+  assert.ok(ai(easy).income < ai(normal).income && ai(normal).income < ai(brutal).income, '30일 뒤에도 AI 수입은 난이도 순');
+  assert.strictEqual(easy.countries[0].income, normal.countries[0].income, '플레이어 수입은 난이도와 무관');
+  assert.ok(!A.setDifficulty(easy, '없는난이도') && easy.difficulty === 'easy');
+  assert.ok(A.setDifficulty(easy, 'hard') && A.diffOf(easy).aiEco === A.DIFFICULTY.hard.aiEco);
+});
+
+test('난이도: 쉬움은 AI가 플레이어에게 늦게 선전포고하고 어려움은 일찍 한다', () => {
+  const warsOnPlayer = (lvl, days) => {
+    let n = 0;
+    for (let seed = 1; seed <= 8; seed++) {
+      const G = A.newGame(seed, 6, lvl); A.setPlayer(G, 0);
+      for (let d = 0; d < days && !G.over; d++) A.tickDay(G);
+      n += A.neighborsOf(G, 0).filter(o => A.atWar(G, 0, o)).length;
+    }
+    return n;
+  };
+  const easy = warsOnPlayer('easy', 120), brutal = warsOnPlayer('brutal', 120);
+  assert.strictEqual(easy, 0, '쉬움: 150일 전까지 AI는 플레이어를 공격하지 않는다');
+  assert.ok(brutal > 0, '매우 어려움: 일찍 선전포고를 받는다');
+});
+
+test('난이도: 저장/불러오기가 난이도를 유지한다', () => {
+  const G = A.newGame(2, 6, 'hard');
+  const z = A.deserialize(JSON.parse(JSON.stringify(A.serialize(G))));
+  assert.strictEqual(z.difficulty, 'hard');
 });
 
 console.log(`${n} tests passed`);

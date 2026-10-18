@@ -2,7 +2,7 @@
 // 의존성 없음. 결과물(dist/)은 어떤 정적 호스팅에든 그대로 올리면 된다.
 const fs = require('fs'), path = require('path'), crypto = require('crypto');
 const root = path.join(__dirname, '..'), dist = path.join(root, 'dist');
-const ORDER = ['map', 'game', 'economy', 'fronts', 'ai', 'ui'];
+const ORDER = ['map', 'divisions', 'game', 'economy', 'fronts', 'ai', 'ui'];
 const hash = s => crypto.createHash('sha1').update(s).digest('hex').slice(0, 8);
 
 const js = ORDER.map(f => `/* ${f}.js */\n` + fs.readFileSync(path.join(root, 'js', f + '.js'), 'utf8')).join('\n');

@@ -15,6 +15,7 @@ let hover = -1, selProv = -1, selArmies = new Set(), moveMode = false, selFront 
 let winTab = null;                 // 왼쪽 탭 창: null | 'eco' | 'mil' | 'dip'
 let selBox = null;                 // 드래그 박스 선택 중인 화면 사각형
 let dragMode = (window.matchMedia && matchMedia('(pointer: coarse)').matches) ? 'pan' : 'select';   // 드래그 동작: 박스 선택 / 지도 이동
+let design = { name: '', bn: { inf: 5 }, sup: {} };   // 사단 설계 작업본
 let drawMode = null;            // 전선/화살표 그리기: { kind:'line'|'arrow', front, items:[], enemy, anchor }
 let panelDirty = true;
 
@@ -55,12 +56,12 @@ function enterGame(g, p) {
   G.dirty = true; panelDirty = true;
 }
 function startGame() {
-  enterGame(newGame(+$('seed').value || 1, +$('ncountries').value), 'pick');
+  enterGame(newGame(+$('seed').value || 1, +$('ncountries').value, $('difficulty').value), 'pick');
   banner('플레이할 국가를 지도에서 클릭하세요');
   fitCamera();
 }
 function pickCountry(id) {
-  G.player = id; G.countries[id].ai = false;
+  setPlayer(G, id);
   phase = 'play'; speed = 0;
   $('banner').style.display = 'none';
   banner(`${G.countries[id].name} — Space로 시작`, 4000);
@@ -88,6 +89,7 @@ function loadGame(key = SAVE_KEY) {
   try {
     const g = deserialize(JSON.parse(raw));
     enterGame(g, 'play');
+    $('difficulty').value = g.difficulty; syncDiffDesc();
     focusCapital();
     banner(`불러왔습니다 — ${dateStr(g.day)}`, 2500);
     return true;
@@ -275,6 +277,7 @@ function setSpeed(s) {
 }
 function showMenu() {
   speed = 0; syncTop();
+  if (G) { $('difficulty').value = G.difficulty; syncDiffDesc(); }
   const has = !!(store.get(AUTO_KEY) || store.get(SAVE_KEY));
   $('continue').style.display = has ? 'block' : 'none';
   $('overlay').classList.remove('hidden');
@@ -413,6 +416,7 @@ window.addEventListener('keydown', e => {
   else if (e.code === 'KeyP') toggleWin('eco');
   else if (e.code === 'KeyM') toggleWin('mil');
   else if (e.code === 'KeyD') toggleWin('dip');
+  else if (e.code === 'KeyT') toggleWin('des');
   else if (e.code === 'Escape') { if (selArmies.size) selArmies = new Set(); else winTab = null; panelDirty = true; syncTop(); }
   else if (e.code.startsWith('Arrow')) {   // 방향키로 지도 이동
     e.preventDefault();
@@ -423,6 +427,15 @@ window.addEventListener('keydown', e => {
 document.querySelector('.speeds').addEventListener('click', e => {
   const b = e.target.closest('button'); if (b) setSpeed(+b.dataset.speed);
 });
+function syncDiffDesc() {
+  const d = DIFFICULTY[$('difficulty').value];
+  $('diffdesc').textContent = `AI 경제 ${Math.round(d.aiEco * 100)}% · AI가 주는 피해 ×${d.aiDmg} · 플레이어 공격까지 유예 ${d.warDay}일 · 시작 자원 ×${d.pStart}` + (G && G.player >= 0 ? ' — 바꾸면 진행 중인 게임에도 바로 적용' : '');
+}
+$('difficulty').addEventListener('change', () => {
+  syncDiffDesc();
+  if (G && G.player >= 0 && phase !== 'over') { setDifficulty(G, $('difficulty').value); toast(`난이도를 ${diffOf(G).name}(으)로 바꿨습니다`, 'warn', 3500); panelDirty = true; }
+});
+syncDiffDesc();
 $('start').addEventListener('click', startGame);
 $('continue').addEventListener('click', () => {
   const auto = store.get(AUTO_KEY), manual = store.get(SAVE_KEY);
@@ -443,6 +456,13 @@ function onAction(e) {
   const other = b.dataset.c !== undefined ? +b.dataset.c : (p ? p.owner : -1);   // 외교 대상: 외교 탭은 data-c, 지역 패널은 선택한 지역의 소유국
   switch (b.dataset.act) {
     case 'tab': winTab = b.dataset.tab; break;
+    case 'dbn': { const k = b.dataset.k, d = +b.dataset.d, n = (design.bn[k] || 0) + d, tot = Object.values(design.bn).reduce((s, v) => s + (v || 0), 0) + d; if (n >= 0 && tot <= MAX_BN) design.bn[k] = n; break; }
+    case 'dsup': { const k = b.dataset.k, d = +b.dataset.d, n = (design.sup[k] || 0) + d, tot = Object.values(design.sup).reduce((s, v) => s + (v || 0), 0) + d; if (n >= 0 && tot <= MAX_SUP) design.sup[k] = n; break; }
+    case 'dreset': design = { name: '', bn: { inf: 5 }, sup: {} }; break;
+    case 'dload': { const t = UNITS[b.dataset.id]; if (t) design = { name: '', bn: { ...t.bn }, sup: { ...t.sup } }; toast('구성을 불러왔습니다. 이름을 정하고 저장하세요', 'info', 3000, true); break; }
+    case 'dsave': { const r = designTemplate(G, G.player, design); resultToast(r); if (r.ok) design = { name: '', bn: { ...design.bn }, sup: { ...design.sup } }; break; }
+    case 'dtrain': if (addTrainLine(G, G.player, b.dataset.id)) toast(`「${UNITS[b.dataset.id].name}」 훈련 라인을 추가했습니다 (🏭 생산)`, 'good', 3000, true); else toast(`훈련 라인은 최대 ${MAX_LINES}개입니다`, 'warn'); break;
+    case 'ddel': resultToast(deleteTemplate(G, G.player, b.dataset.id)); break;
     case 'wclose': winTab = null; break;
     case 'train': addTrainLine(G, G.player, b.dataset.type); break;
     case 'rmline': removeLine(G, G.player, +b.dataset.i); break;
@@ -495,6 +515,7 @@ function onToggleArmy(e) {
   panelDirty = true;
 }
 for (const id of ['panel', 'win']) $(id).addEventListener('change', onToggleArmy);
+$('win').addEventListener('input', e => { if (e.target.id === 'dname') design.name = e.target.value; });
 // 메뉴 버튼 / 드래그 모드
 document.querySelector('.menus').addEventListener('click', e => { const b = e.target.closest('[data-win]'); if (b) toggleWin(b.dataset.win); });
 $('btnDrag').addEventListener('click', () => { dragMode = dragMode === 'select' ? 'pan' : 'select'; syncTop(); panelDirty = true; toast(dragMode === 'select' ? '드래그 = 부대 박스 선택 (지도 이동: 우클릭 드래그)' : '드래그 = 지도 이동', 'info', 3000); });
@@ -503,7 +524,16 @@ function toggleWin(tab) { winTab = winTab === tab ? null : tab; panelDirty = tru
 // ---------- 패널/상단바 ----------
 const sw = c => `<span class="swatch" style="background:rgb(${c.color})"></span>`;
 const esc = s => String(s).replace(/[&<>]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[ch]));
-const compText = a => Object.entries(a.comp).filter(([, v]) => v >= 0.05).map(([t, v]) => `${UNITS[t].name} ${v.toFixed(1)}`).join(' · ');
+// 병과 아이콘: 보병=X, 기갑=타원, 산악=산, 포병=원 (NATO 부호 느낌). 지도 마커와 같은 모양
+const CLS_SVG = {
+  inf: '<path d="M2 2L18 12M18 2L2 12" stroke="currentColor" stroke-width="1.6" fill="none"/>',
+  arm: '<ellipse cx="10" cy="7" rx="6.5" ry="4" stroke="currentColor" stroke-width="1.6" fill="none"/>',
+  mtn: '<path d="M2 2L18 12M18 2L2 12" stroke="currentColor" stroke-width="1" opacity=".45" fill="none"/><path d="M4.5 11.5L10 2.5L15.5 11.5Z" stroke="currentColor" stroke-width="1.6" fill="none"/>',
+  art: '<circle cx="10" cy="7" r="3.3" fill="currentColor"/>',
+};
+const clsIcon = (cls, lg) => `<span class="uic${lg ? ' lg' : ''}" title="${CLS_NAME[cls]}"><svg viewBox="0 0 20 14"><rect x="1" y="1" width="18" height="12" rx="1.5" fill="#0d1620" stroke="currentColor" stroke-width="1.2"/>${CLS_SVG[cls]}</svg></span>`;
+const unitTag = t => clsIcon(UNITS[t].cls) + esc(UNITS[t].name);
+const compText = a => Object.entries(a.comp).filter(([, v]) => v >= 0.05).map(([t, v]) => `${unitTag(t)} ${v.toFixed(1)}`).join(' · ');
 const factionTag = c => c.faction >= 0 ? `<span class="tag">${esc(G.factions[c.faction].name)}</span>` : '';
 
 function syncTop() {
@@ -516,14 +546,14 @@ function syncTop() {
   if (G.player >= 0) {
     const me = G.countries[G.player];
     const divs = G.armies.filter(a => a.owner === me.id).reduce((s, a) => s + a.hp, 0);
-    $('pp').innerHTML = `${sw(me)}${esc(me.name)} · PP <b>${me.pp.toFixed(0)}</b> · 보병장비 <b>${me.equip.small.toFixed(0)}</b> · 전차 <b>${me.equip.tank.toFixed(0)}</b> · 인력 <b>${me.manpower.toFixed(0)}k</b> · 사단 ${divs.toFixed(1)}`;
+    $('pp').innerHTML = `${sw(me)}${esc(me.name)} · PP <b>${me.pp.toFixed(0)}</b> · 보병장비 <b>${me.equip.small.toFixed(0)}</b> · 전차 <b>${me.equip.tank.toFixed(0)}</b> · 야포 <b>${me.equip.gun.toFixed(0)}</b> · 인력 <b>${me.manpower.toFixed(0)}k</b> · 사단 ${divs.toFixed(1)}`;
     const w = warsOf(G, me.id);
     $('wars').textContent = w.length ? '⚔ ' + w.map(i => G.countries[i].name).join(', ') : '';
   }
 }
 
 function setHTML(el, html) { const top = el.scrollTop; el.innerHTML = html; el.scrollTop = top; }
-const compSum = arr => { const t = {}; for (const a of arr) for (const k in a.comp) t[k] = (t[k] || 0) + a.comp[k]; return Object.entries(t).filter(([, v]) => v >= 0.05).map(([k, v]) => `${UNITS[k].name} ${v.toFixed(1)}`).join(' · '); };
+const compSum = arr => { const t = {}; for (const a of arr) for (const k in a.comp) t[k] = (t[k] || 0) + a.comp[k]; return Object.entries(t).filter(([, v]) => v >= 0.05).map(([k, v]) => `${unitTag(k)} ${v.toFixed(1)}`).join(' · '); };
 const frontName = a => { const f = a.front && G.fronts.find(x => x.id === a.front); return f ? f.name : null; };
 
 function renderPanel() {
@@ -538,7 +568,7 @@ function renderPanel() {
 
 const helpHtml = () => `<div class="help"><b>조작</b><br>${dragMode === 'select'
   ? '좌클릭: 지역 선택 · <b>좌드래그: 부대 박스 선택</b> (Shift: 추가)<br>우클릭: 선택한 부대 이동 · 우드래그·휠: 지도 이동·확대'
-  : '탭: 지역 선택 · 드래그: 지도 이동 · 핀치: 확대<br>길게 누르기: 이동 명령 · 상단 ▭ 버튼: 박스 선택 모드'}<br>메뉴: <kbd>P</kbd> 생산 · <kbd>M</kbd> 군사 · <kbd>D</kbd> 외교</div>`;
+  : '탭: 지역 선택 · 드래그: 지도 이동 · 핀치: 확대<br>길게 누르기: 이동 명령 · 상단 ▭ 버튼: 박스 선택 모드'}<br>메뉴: <kbd>P</kbd> 생산 · <kbd>M</kbd> 군사 · <kbd>D</kbd> 외교 · <kbd>T</kbd> 설계<br>부대 기호: ${['inf', 'arm', 'mtn', 'art'].map(k => `${clsIcon(k)}${CLS_NAME[k]}`).join(' ')}</div>`;
 
 // ----- 오른쪽 패널: 선택한 지역 -----
 function htmlSelection(me) {
@@ -593,14 +623,15 @@ function diploButtons(me, c) {
 }
 
 // ----- 왼쪽 탭 창 -----
-const WIN_TABS = [['eco', '🏭 생산', 'P'], ['mil', '⚔ 군사', 'M'], ['dip', '🤝 외교', 'D']];
+const WIN_TABS = [['eco', '🏭 생산', 'P'], ['mil', '⚔ 군사', 'M'], ['dip', '🤝 외교', 'D'], ['des', '🛠 설계', 'T']];
 function renderWin(me) {
   const win = $('win');
   if (!winTab || !me) { win.classList.add('hidden'); return; }
   win.classList.remove('hidden');
   const prev = win.querySelector('.wbody'), top = prev ? prev.scrollTop : 0;
   const tabs = WIN_TABS.map(([k, label, key]) => `<button data-act="tab" data-tab="${k}" class="${winTab === k ? 'on' : ''}">${label}<kbd>${key}</kbd></button>`).join('');
-  const body = winTab === 'eco' ? htmlEconomy(me) : winTab === 'mil' ? htmlMilitary(me) : htmlDiplomacy(me);
+  if (winTab === 'des' && document.activeElement && document.activeElement.id === 'dname') return;   // 이름을 입력하는 중에는 다시 그리지 않는다
+  const body = winTab === 'eco' ? htmlEconomy(me) : winTab === 'mil' ? htmlMilitary(me) : winTab === 'des' ? htmlDesigner(me) : htmlDiplomacy(me);
   win.innerHTML = `<div class="wtabs">${tabs}<button class="x" data-act="wclose" title="닫기 (Esc)">×</button></div><div class="wbody">${body}</div>`;
   win.querySelector('.wbody').scrollTop = top;
 }
@@ -622,15 +653,16 @@ function htmlEconomy(me) {
   }
   h += `<div class="dim">공장은 지도에서 내 지역을 선택해 건설합니다 (${FACTORY_COST} PP).</div>`;
   h += `<h3>사단 훈련 (반복)</h3>`;
-  const stallText = { small: '보병장비 부족', tank: '전차 부족', mp: '인력 부족', slot: '대기' };
+  const stallText = { small: '보병장비 부족', tank: '전차 부족', gun: '야포 부족', mp: '인력 부족', slot: '대기' };
   me.queue.forEach((q, i) => {
-    const u2 = UNITS[q.type], days = TRAIN_DAYS[q.type];
+    const u2 = UNITS[q.type], days = u2.days;
     const state = q.started ? `훈련 ${q.progress}/${days}일` : `<span class="warn">${stallText[q.stall] || '대기'}</span>`;
-    h += `<div class="dim">${u2.name} · ${state} <a href="#" data-act="rmline" data-i="${i}" onclick="return false">[삭제]</a></div><div class="bar"><i style="width:${q.started ? q.progress / days * 100 : 0}%"></i></div>`;
+    h += `<div class="dim">${unitTag(q.type)} · ${state} <a href="#" data-act="rmline" data-i="${i}" onclick="return false">[삭제]</a></div><div class="bar"><i style="width:${q.started ? q.progress / days * 100 : 0}%"></i></div>`;
   });
   const costText = u2 => Object.entries(u2.eq).map(([k, v]) => `${EQUIP[k].name} ${v}`).join(' · ') + ` · 인력 ${u2.mp}k`;
-  h += `<div class="row">` + Object.entries(UNITS).map(([t, u2]) => `<button data-act="train" data-type="${t}" ${me.queue.length >= MAX_LINES ? 'disabled' : ''} title="${costText(u2)} · ${TRAIN_DAYS[t]}일">+${u2.name}</button>`).join('') + `</div>`;
-  h += `<div class="dim">${Object.entries(UNITS).map(([t, u2]) => `${u2.name}: ${costText(u2)}`).join('<br>')}</div>`;
+  const ids = templateIdsFor(G, me.id);
+  h += `<div class="row">` + ids.map(t => `<button data-act="train" data-type="${t}" ${me.queue.length >= MAX_LINES ? 'disabled' : ''} title="${costText(UNITS[t])} · ${UNITS[t].days}일">${clsIcon(UNITS[t].cls)}+${esc(UNITS[t].name)}</button>`).join('') + `</div>`;
+  h += `<div class="dim">${ids.map(t => `${unitTag(t)}: ${costText(UNITS[t])} · ${UNITS[t].days}일`).join('<br>')}</div><div class="dim">새 사단은 <kbd>T</kbd> 설계 메뉴에서 만들 수 있습니다.</div>`;
   if (!me.queue.length) h += `<div class="warn">훈련 라인이 없으면 사단이 편성되지 않습니다.</div>`;
   return h;
 }
@@ -667,9 +699,55 @@ function htmlMilitary(me) {
   return h;
 }
 
+// 지형별 보정을 칩으로: 기본(1.0) 대비 올라가면 초록, 내려가면 빨강
+function terrChips(u) {
+  const names = { forest: '숲', hills: '구릉', mountain: '산악', marsh: '늪' };
+  return Object.entries(names).map(([k, nm]) => { const v = u.terr[k] ?? 1, cls = v > 1.02 ? 'up' : v < 0.98 ? 'down' : ''; return `<span class="chip ${cls}">${nm} ×${v.toFixed(2)}</span>`; }).join('');
+}
+const costLine = u => Object.entries(u.eq).map(([k, v]) => `${EQUIP[k].name} ${v}`).join(' · ') + ` · 인력 ${u.mp}k`;
+
+function htmlDesigner(me) {
+  const bnTotal = Object.values(design.bn).reduce((s, v) => s + (v || 0), 0), supTotal = Object.values(design.sup).reduce((s, v) => s + (v || 0), 0);
+  const u = compileTemplate({ name: design.name || '새 사단', bn: design.bn, sup: design.sup });
+  const base = UNITS.inf;
+  const delta = (v, b) => { const p = (v / b - 1) * 100; return `<span class="${p >= 0 ? 'good' : 'bad'}">${p >= 0 ? '+' : ''}${p.toFixed(0)}%</span>`; };
+  let h = `<div class="dim">전투 대대와 지원 중대를 조합해 사단을 설계합니다. 설계한 사단은 <b>🏭 생산</b>에서 훈련 라인으로 만듭니다.</div>`;
+  h += `<input type="text" id="dname" maxlength="14" placeholder="사단 이름 (예: 포병 사단)" value="${esc(design.name)}">`;
+  h += `<h3 style="margin-top:4px">전투 대대 ${bnTotal}/${MAX_BN}</h3>`;
+  for (const [k, b] of Object.entries(BN)) {
+    const n = design.bn[k] || 0;
+    h += `<div class="brow"><span>${clsIcon(b.cls, true)}</span><span class="nm">${b.name} <b>${n}</b></span><span><button data-act="dbn" data-k="${k}" data-d="-1" ${n > 0 ? '' : 'disabled'}>−</button> <button data-act="dbn" data-k="${k}" data-d="1" ${bnTotal < MAX_BN ? '' : 'disabled'}>+</button></span>`
+      + `<span class="st">공격 ${b.atk} · 방어 ${b.def} · 속도 ${b.speed} · ${Object.entries(b.eq).map(([e, v]) => `${EQUIP[e].name} ${v}`).join('')} · 인력 ${b.mp}k</span></div>`;
+  }
+  h += `<h3>지원 중대 ${supTotal}/${MAX_SUP}</h3>`;
+  for (const [k, s] of Object.entries(SUPPORT)) {
+    const n = design.sup[k] || 0;
+    h += `<div class="brow"><span>${k === 'recon' ? '🔭' : '🔧'}</span><span class="nm">${s.name} <b>${n}</b></span><span><button data-act="dsup" data-k="${k}" data-d="-1" ${n > 0 ? '' : 'disabled'}>−</button> <button data-act="dsup" data-k="${k}" data-d="1" ${supTotal < MAX_SUP ? '' : 'disabled'}>+</button></span><span class="st">${s.desc}</span></div>`;
+  }
+  h += `<div class="dstat">`;
+  if (!u.nbn) h += `<span class="warn">전투 대대를 하나 이상 넣으세요.</span>`;
+  else {
+    h += `<div class="big">${clsIcon(u.cls, true)} 공격 <b>${u.atk.toFixed(2)}</b> ${delta(u.atk, base.atk)} · 방어 <b>${u.def.toFixed(2)}</b> ${delta(u.def, base.def)} · 속도 <b>${u.speed.toFixed(2)}</b></div>`;
+    h += `<div>비용: ${costLine(u)} · 훈련 <b>${u.days}</b>일</div>`;
+    h += `<div class="dim">보병 사단 대비 비율. 지형 보정: ${terrChips(u)}</div>`;
+    h += `<div class="dim">환산 전력 <b>${(((u.atk + u.def) / 2.1)).toFixed(2)}</b> · 험지 이동 페널티 반영 ${(u.rough * 100).toFixed(0)}%</div>`;
+  }
+  h += `</div><div class="row"><button class="primary" data-act="dsave" ${u.nbn ? '' : 'disabled'}>설계 저장</button><button data-act="dreset">초기화</button></div>`;
+  h += `<div class="dim" style="margin-top:6px">불러와서 고치기: ${PRESETS.map(p => `<a href="#" data-act="dload" data-id="${p.id}" onclick="return false">${esc(p.name)}</a>`).join(' · ')}</div>`;
+
+  h += `<h3>사용 가능한 사단</h3>`;
+  for (const id of templateIdsFor(G, me.id)) {
+    const t = UNITS[id], own = !isPreset(id);
+    h += `<div class="tcard"><div>${clsIcon(t.cls, true)}<b>${esc(t.name)}</b> ${own ? '<span class="tag">내 설계</span>' : '<span class="tag">기본</span>'}</div>`
+      + `<div class="dim">${esc(describeTemplate(t))}</div><div class="dim">공격 ${t.atk.toFixed(2)} · 방어 ${t.def.toFixed(2)} · 속도 ${t.speed.toFixed(2)} · ${costLine(t)} · ${t.days}일</div><div>${terrChips(t)}</div>`
+      + `<div class="row"><button data-act="dtrain" data-id="${id}" ${me.queue.length >= MAX_LINES ? 'disabled' : ''}>+ 훈련 라인</button><button data-act="dload" data-id="${id}">불러와 고치기</button>${own ? `<button data-act="ddel" data-id="${id}">삭제</button>` : ''}</div></div>`;
+  }
+  return h;
+}
+
 function htmlDiplomacy(me) {
   const w = warsOf(G, me.id);
-  let h = `<div class="stat">영토 ${ownedCount(G, me.id)} / ${G.landCount} · 승리: 60% 점령 또는 동맹 통일</div>`;
+  let h = `<div class="stat">영토 ${ownedCount(G, me.id)} / ${G.landCount} · 승리: 60% 점령 또는 동맹 통일<br><span class="dim">난이도: <b>${diffOf(G).name}</b> (☰ 메뉴에서 변경)</span></div>`;
   if (w.length) h += `<div class="warn">⚔ 교전 중: ${w.map(i => esc(G.countries[i].name)).join(', ')}</div>`;
   if (me.faction >= 0) h += `<div class="row">${factionTag(me)}<button data-act="leave">동맹 탈퇴</button></div>`;
   h += `<h3>국가</h3>`;
@@ -704,14 +782,31 @@ function renderLog() {
 }
 
 // ---------- 그리기 ----------
-function flag(x, y, color, n, selected, badge) {
-  const w = 22, h = 14;
-  ctx.fillStyle = `rgb(${color})`; ctx.fillRect(x - w / 2, y - h / 2, w, h);
-  ctx.lineWidth = selected ? 2 : 1; ctx.strokeStyle = selected ? '#fff' : '#101820'; ctx.strokeRect(x - w / 2, y - h / 2, w, h);
+// 병과 기호(지도): 보병=X, 기갑=타원, 산악=산, 포병=원. 흰 선 + 어두운 외곽선으로 어느 국가색 위에서도 읽힌다
+function drawSym(cls, cx, cy) {
+  const trace = () => {
+    if (cls === 'inf') { ctx.moveTo(cx - 4.6, cy - 3.4); ctx.lineTo(cx + 4.6, cy + 3.4); ctx.moveTo(cx + 4.6, cy - 3.4); ctx.lineTo(cx - 4.6, cy + 3.4); }
+    else if (cls === 'arm') ctx.ellipse(cx, cy, 4.8, 3, 0, 0, Math.PI * 2);
+    else if (cls === 'mtn') { ctx.moveTo(cx - 4.8, cy + 3.6); ctx.lineTo(cx, cy - 3.8); ctx.lineTo(cx + 4.8, cy + 3.6); ctx.closePath(); }
+    else ctx.arc(cx, cy, 2.6, 0, Math.PI * 2);
+  };
+  for (const [w, col] of [[3.2, '#0a0f16'], [1.5, '#ffffff']]) { ctx.beginPath(); trace(); ctx.lineWidth = w; ctx.strokeStyle = col; ctx.lineJoin = 'round'; ctx.stroke(); }
+  if (cls === 'art') { ctx.beginPath(); ctx.arc(cx, cy, 2.6, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill(); }
+}
+
+// 부대 마커: [병과 기호 1~2개][숫자]. 국가색 바탕, 선택하면 흰 테두리, 전선 배치 시 모서리에 모드 점
+function flag(x, y, color, n, selected, badge, classes = ['inf']) {
+  const symW = 13, label = String(n), numW = label.length * 6 + 4, w = classes.length * symW + numW + 2, h = 15;
+  const x0 = x - w / 2, y0 = y - h / 2;
+  ctx.fillStyle = `rgb(${color})`; ctx.fillRect(x0, y0, w, h);
+  ctx.lineWidth = selected ? 2 : 1; ctx.strokeStyle = selected ? '#fff' : '#101820'; ctx.strokeRect(x0, y0, w, h);
+  classes.forEach((cls, i) => drawSym(cls, x0 + 2 + symW * (i + 0.5), y));
   ctx.fillStyle = '#fff'; ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.strokeStyle = '#000'; ctx.lineWidth = 2.5; ctx.strokeText(n, x, y + 0.5); ctx.fillText(n, x, y + 0.5);
-  if (badge) { // 전선 배치 표시: 공격=주황, 방어=파랑
-    ctx.beginPath(); ctx.arc(x + w / 2, y - h / 2, 3.6, 0, Math.PI * 2);
+  ctx.strokeStyle = '#000'; ctx.lineWidth = 2.5; ctx.lineJoin = 'round';
+  const nx = x0 + 2 + symW * classes.length + numW / 2;
+  ctx.strokeText(label, nx, y + 0.5); ctx.fillText(label, nx, y + 0.5);
+  if (badge) {
+    ctx.beginPath(); ctx.arc(x0 + w, y0, 3.6, 0, Math.PI * 2);
     ctx.fillStyle = badge === 'attack' ? '#ff6a40' : '#4a9bff'; ctx.fill(); ctx.lineWidth = 1; ctx.strokeStyle = '#fff'; ctx.stroke();
   }
 }
@@ -859,15 +954,21 @@ function draw() {
   for (const a of G.armies) {
     if (!isFriend(a.owner) && !canSee(a.prov)) continue;
     const key = a.prov + ':' + a.owner;
-    if (!groups.has(key)) groups.set(key, { prov: a.prov, owner: a.owner, hp: 0, sel: false, badge: null });
+    if (!groups.has(key)) groups.set(key, { prov: a.prov, owner: a.owner, hp: 0, sel: false, badge: null, cls: {} });
     const g = groups.get(key); g.hp += a.hp; g.sel = g.sel || selArmies.has(a.id);
+    for (const t in a.comp) {   // 사단의 대대 구성 비율대로 병과를 집계 (보병 3 + 포병 2 → 보병 0.6, 포병 0.4)
+      const un = UNITS[t];
+      for (const [k, n] of Object.entries(un.clsCount)) g.cls[k] = (g.cls[k] || 0) + a.comp[t] * n / un.nbn;
+    }
     if (a.front && !g.badge) { const f = G.fronts.find(x => x.id === a.front); if (f) g.badge = f.mode; }
   }
   const perProv = new Map();
   for (const g of groups.values()) {
     const i = perProv.get(g.prov) || 0; perProv.set(g.prov, i + 1);
     const p = G.provs[g.prov];
-    flag(p.x + i * 14 - 4, p.y + 4 + i * 10, G.countries[g.owner].color, Math.ceil(g.hp - 1e-6), g.sel, g.badge);
+    const tot = Object.values(g.cls).reduce((s, v) => s + v, 0);
+    const classes = Object.entries(g.cls).filter(([, v]) => v >= tot * 0.15).sort((x, y) => y[1] - x[1]).slice(0, 3).map(([k]) => k);
+    flag(p.x + i * 16 - 6, p.y + 4 + i * 11, G.countries[g.owner].color, Math.ceil(g.hp - 1e-6), g.sel, g.badge, classes.length ? classes : ['inf']);
   }
   drawSelBox(dpr);
 }

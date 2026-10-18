@@ -166,7 +166,7 @@ function frontsTick(G) {
 // 적 부대 병력 (시야 밖은 1.5로 가정)
 function foeHp(G, pid, owner, vis) {
   if (!vis.has(pid)) return 1.5;
-  return enemiesAt(G, pid, owner).reduce((s, a) => s + a.hp, 0);
+  return enemiesAt(G, pid, owner).reduce((s, a) => s + armyStr(a), 0);
 }
 
 function runFront(G, f, vis) {
@@ -181,7 +181,7 @@ function runFront(G, f, vis) {
   // 접경별 정보: 위협(인접 적 병력 최댓값), 약한 정도(인접 적 병력 최솟값), 현재 배치량, 침투한 적 병력, 화살표 목표와의 인접 수
   const threat = new Map(), weak = new Map(), cov = new Map(), inside = new Map(), pull = new Map();
   for (const b of border) {
-    inside.set(b, enemiesAt(G, b, owner).reduce((s, a) => s + a.hp, 0));
+    inside.set(b, enemiesAt(G, b, owner).reduce((s, a) => s + armyStr(a), 0));
     let mx = 0, mn = Infinity, pl = 0;
     for (const n of P[b].adj) if (P[n].land && P[n].controller === f.enemy) {
       const h = foeHp(G, n, owner, vis);
@@ -192,7 +192,7 @@ function runFront(G, f, vis) {
   }
   for (const a of armies) {
     const dest = a.path.length ? a.path[a.path.length - 1] : a.prov;
-    if (cov.has(dest)) cov.set(dest, cov.get(dest) + a.hp);
+    if (cov.has(dest)) cov.set(dest, cov.get(dest) + armyStr(a));
   }
 
   // 한 지역에 모인 대기 중인 사단들은 합산 전력으로 함께 움직인다
@@ -212,7 +212,7 @@ function runFront(G, f, vis) {
     // 방어 모드는 국지 우세일 때 적 부대만 역공한다
     if (border.has(pid)) {
       const ready = list.filter(a => a.org >= 0.4 && isSupplied(G, a));
-      const readyHp = ready.reduce((s, a) => s + a.hp, 0);
+      const readyHp = ready.reduce((s, a) => s + armyStr(a), 0);
       if (ready.length) {
         let best = null, bs = Infinity;
         for (const n of P[pid].adj) {
@@ -243,8 +243,8 @@ function runFront(G, f, vis) {
       }
       if (best === null || best === a.prov) continue;
       if (here && need(a.prov) - bs < 1.2) continue; // 이미 충분히 균형이면 이동하지 않는다
-      if (cov.has(a.prov)) cov.set(a.prov, cov.get(a.prov) - a.hp);
-      cov.set(best, cov.get(best) + a.hp);
+      if (cov.has(a.prov)) cov.set(a.prov, cov.get(a.prov) - armyStr(a));
+      cov.set(best, cov.get(best) + armyStr(a));
       a.path = bestPath; a.prog = 0;
     }
   }
