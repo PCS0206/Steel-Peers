@@ -18,15 +18,23 @@
     <button data-speed="2">▶▶</button>
     <button data-speed="3">▶▶▶</button>
   </span>
+  <span class="menus">
+    <button data-win="eco" title="생산·공장 (P)"><span class="ic">🏭</span><span class="tx"> 생산</span></button>
+    <button data-win="mil" title="군사·전선·부대 (M)"><span class="ic">⚔</span><span class="tx"> 군사</span></button>
+    <button data-win="dip" title="외교 (D)"><span class="ic">🤝</span><span class="tx"> 외교</span></button>
+  </span>
   <span id="pp"></span>
   <span id="wars"></span>
   <span class="spacer"></span>
+  <button id="btnDrag" title="지도 드래그 동작 전환 (박스 선택 / 지도 이동)"><span class="ic">▭</span><span class="tx"> 선택</span></button>
   <button id="btnSave" title="저장">💾</button>
   <button id="btnLoad" title="불러오기">📂</button>
   <button id="btnMenu" title="메뉴">☰</button>
 </div>
 
 <aside id="panel"></aside>
+<div id="win" class="hidden"></div>
+<div id="selbar" class="hidden"></div>
 <div id="log"></div>
 <div id="banner"></div>
 <div id="toasts"></div>

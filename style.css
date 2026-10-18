@@ -1,7 +1,7 @@
 :root { --bg:#0d1620; --panel:#16222f; --line:#2b3d52; --text:#dbe6f2; --dim:#8aa0b6; --accent:#e0b34a; }
 * { box-sizing: border-box; }
 html, body { margin:0; height:100%; overflow:hidden; background:var(--bg); color:var(--text); font:14px/1.45 system-ui, 'Noto Sans KR', sans-serif; }
-canvas#map { touch-action:none; position:fixed; inset:0; width:100%; height:100%; display:block; cursor:grab; }
+canvas#map { touch-action:none; position:fixed; inset:0; width:100%; height:100%; display:block; cursor:default; }
 button { background:#223347; color:var(--text); border:1px solid var(--line); border-radius:4px; padding:5px 10px; cursor:pointer; font:inherit; }
 button:hover:not(:disabled) { background:#2d4560; }
 button:disabled { opacity:.4; cursor:default; }
@@ -87,10 +87,51 @@ button.on-mode { background:var(--accent); color:#1a1305; }
 @media (max-width: 720px) { #toasts { left:50%; top:48px; } }
 
 /* 전선 그리기 바 */
-#drawbar { position:fixed; left:calc((100% - 290px) / 2); bottom:18px; transform:translateX(-50%); z-index:25; display:flex; align-items:center; gap:14px; background:#0d1620f5; border:1px solid #e0903a; border-radius:8px; padding:10px 14px; box-shadow:0 4px 18px #000b; max-width:min(720px, 94vw); }
+#drawbar { position:fixed; left:392px; bottom:18px; z-index:25; display:flex; align-items:center; gap:14px; background:#0d1620f5; border:1px solid #e0903a; border-radius:8px; padding:10px 14px; box-shadow:0 4px 18px #000b; max-width:calc(100% - 392px - 300px); }
 #drawbar.hidden { display:none; }
 #drawbar #drawtext { font-size:14px; line-height:1.45; }
 #drawbar .btns { display:flex; gap:6px; flex:none; }
 #drawbar button.primary { background:var(--accent); color:#1a1305; border-color:var(--accent); font-weight:700; }
 body.drawing canvas#map { cursor:crosshair; }
-@media (max-width: 720px) { #drawbar { left:50%; bottom:calc(40% + 10px); flex-direction:column; align-items:stretch; gap:8px; } }
+@media (max-width: 720px) { #drawbar { left:8px; right:8px; max-width:none; bottom:calc(40% + 10px); flex-direction:column; align-items:stretch; gap:8px; } }
+
+/* 상단 메뉴 / 왼쪽 탭 창 / 하단 선택 바 */
+.menus { display:flex; gap:4px; }
+.menus button.on, #btnDrag.on { background:var(--accent); color:#1a1305; border-color:var(--accent); }
+kbd { display:inline-block; font:11px/1 ui-monospace, monospace; padding:2px 5px; margin-left:5px; border:1px solid var(--line); border-bottom-width:2px; border-radius:4px; color:var(--dim); background:#0d1620; }
+.on kbd { color:#3a2a08; border-color:#00000040; background:#ffffff40; }
+#win { position:fixed; left:12px; top:52px; width:360px; max-height:calc(100vh - 250px); min-height:200px; display:flex; flex-direction:column; background:var(--panel); border:1px solid var(--line); border-radius:8px; box-shadow:0 8px 30px #000a; z-index:20; }
+#win.hidden { display:none; }
+#win .wtabs { display:flex; gap:2px; padding:6px 6px 0; border-bottom:1px solid var(--line); }
+#win .wtabs button { border-radius:6px 6px 0 0; border-bottom:none; padding:6px 10px; background:transparent; color:var(--dim); }
+#win .wtabs button.on { background:#223347; color:var(--text); }
+#win .wtabs button.x { margin-left:auto; padding:4px 10px; font-size:16px; }
+#win .wbody { padding:10px 12px 14px; overflow:auto; }
+#win h3 { margin:14px 0 6px; font-size:12px; letter-spacing:.06em; color:var(--dim); text-transform:uppercase; }
+#win .dim { color:var(--dim); } #win .stat { margin:2px 0 8px; } #win .stat b { color:var(--accent); }
+#win .row { display:flex; gap:6px; flex-wrap:wrap; margin:6px 0; }
+#win .bar { height:6px; background:#0d1620; border-radius:3px; overflow:hidden; margin:3px 0 6px; } #win .bar i { display:block; height:100%; background:var(--accent); }
+#win a { color:var(--accent); }
+.crow { border:1px solid var(--line); border-radius:6px; padding:6px 8px; margin:6px 0; background:#1a2a3a; } .crow.foe { border-color:#b8453a; background:#2a1a1e; }
+.crow .row { margin:4px 0 0; } .crow button { padding:3px 8px; font-size:12px; }
+label.army.sm { padding:1px 0; font-size:13px; } .gtitle { margin-top:8px; }
+.help { margin-top:16px; padding:8px 10px; border:1px dashed var(--line); border-radius:6px; color:var(--dim); font-size:12.5px; line-height:1.6; }
+#selbar { position:fixed; left:392px; bottom:16px; z-index:22; display:flex; align-items:center; gap:14px; max-width:calc(100% - 392px - 300px); background:#0d1620f5; border:1px solid #5b8fd0; border-radius:8px; padding:8px 12px; box-shadow:0 4px 18px #000b; }
+#selbar.hidden { display:none; }
+#selbar .sinfo { font-size:13px; white-space:nowrap; } #selbar .sbtns { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
+#selbar .sbtns button { padding:5px 10px; font-size:13px; }
+@media (max-width: 720px) {
+  #win { left:8px; right:8px; width:auto; top:48px; max-height:36vh; }
+  #selbar { left:8px; right:8px; bottom:calc(40% + 8px); max-width:none; flex-direction:column; align-items:stretch; gap:6px; }
+  .menus button { padding:5px 6px; font-size:12px; }
+}
+
+#topbar button { white-space:nowrap; }
+@media (max-width: 720px) {
+  .menus .tx, #btnDrag .tx { display:none; }
+  #topbar { gap:4px; overflow-x:auto; }
+  #topbar button { padding:5px 8px; }
+  #date { font-size:11px; }
+}
+
+#date { flex:none; }
