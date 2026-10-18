@@ -266,4 +266,28 @@ test('경제: AI가 공장을 늘린다', () => {
   assert.ok(grew >= 3, `countries that built factories: ${grew}`);
 });
 
+// ---------- 알림용 로그/선전포고 미리보기 ----------
+test('선전포고 미리보기가 실제 참전 결과와 일치한다', () => {
+  const G = A.newGame(1, 6);
+  A.formAlliance(G, 0, 1); A.formAlliance(G, 3, 4);
+  const pre = A.warParticipants(G, 0, 3);
+  assert.strictEqual(JSON.stringify(pre), JSON.stringify({ ours: [1], theirs: [4] }));
+  const before = new Set(Object.keys(G.wars));
+  assert.ok(A.declareWar(G, 0, 3));
+  const joined = Object.keys(G.wars).filter(k => !before.has(k)).sort();
+  assert.strictEqual(joined.join(), ['0-3', '1-3', '0-4'].sort().join());
+});
+
+test('로그에 종류·관련 국가·증가하는 id가 붙는다', () => {
+  const G = A.newGame(1, 6);
+  A.formAlliance(G, 0, 1); A.declareWar(G, 2, 0);
+  const kinds = G.log.map(l => l.kind);
+  assert.strictEqual(kinds.join(), 'alliance,war,join');
+  assert.strictEqual(G.log[1].involved.join(), '2,0');
+  assert.strictEqual(G.log[2].involved.join(), '1,2');
+  assert.ok(G.log.every((l, i) => l.id === i + 1));
+  const z = A.deserialize(A.serialize(G));
+  assert.strictEqual(z.logSeq, G.logSeq);
+});
+
 console.log(`${n} tests passed`);

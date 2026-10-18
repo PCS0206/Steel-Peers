@@ -46,7 +46,7 @@ const isFriend = o => G.player >= 0 && (o === G.player || sameFaction(G, G.playe
 
 // ---------- 게임 시작/저장 ----------
 function enterGame(g, p) {
-  G = g; phase = p; speed = 0; selProv = -1; selArmies.clear(); hover = -1; moveMode = false; selFront = null;
+  G = g; lastEventId = g.logSeq; phase = p; speed = 0; selProv = -1; selArmies.clear(); hover = -1; moveMode = false; selFront = null;
   $('overlay').classList.add('hidden');
   G.dirty = true; panelDirty = true;
 }
@@ -58,6 +58,7 @@ function startGame() {
 function pickCountry(id) {
   G.player = id; G.countries[id].ai = false;
   phase = 'play'; speed = 0;
+  $('banner').style.display = 'none';
   banner(`${G.countries[id].name} — Space로 시작`, 4000);
   focusCapital();
 }
@@ -88,11 +89,112 @@ function loadGame(key = SAVE_KEY) {
     return true;
   } catch (e) { banner('저장 데이터를 읽을 수 없습니다', 2500); return false; }
 }
+// ---------- 알림: 배너(고정 안내) / 토스트(상단, 잠깐) / 모달(중앙, 자동 정지) ----------
 let bannerTimer = 0;
-function banner(text, ms) {
-  const b = $('banner'); b.textContent = text; b.style.display = 'block';
-  clearTimeout(bannerTimer); if (ms) bannerTimer = setTimeout(() => { b.style.display = 'none'; }, ms);
+function banner(text, ms, tone) {
+  if (ms) { toast(text, tone || 'info', Math.max(ms, 2500)); return; }   // 짧은 안내는 토스트로
+  const b = $('banner'); b.textContent = text; b.style.display = 'block'; clearTimeout(bannerTimer);
 }
+function toast(text, tone = 'info', ms = 5500, small = false) {
+  const box = $('toasts'), el = document.createElement('div');
+  el.className = `toast ${tone}${small ? ' small' : ''}`; el.textContent = text;
+  const close = () => el.remove();
+  el.addEventListener('click', close);
+  box.appendChild(el);
+  while (box.children.length > 4) box.firstChild.remove();
+  setTimeout(close, ms);
+}
+
+const modalQueue = [];
+let modalOpen = false, modalCur = null, resumeSpeed = 0;
+// opts: { title, body(html), tone, buttons: [{ label, primary, danger, onClick }] }
+function showModal(opts) {
+  modalQueue.push({ tone: 'info', buttons: [{ label: '확인', primary: true }], ...opts });
+  if (!modalOpen) nextModal();
+}
+function nextModal() {
+  const m = modalQueue.shift();
+  if (!m) {
+    modalOpen = false; modalCur = null; $('modal').classList.add('hidden');
+    if (resumeSpeed && phase === 'play') { speed = resumeSpeed; panelDirty = true; syncTop(); }
+    resumeSpeed = 0;
+    return;
+  }
+  if (!modalOpen) { modalOpen = true; if (speed) { resumeSpeed = speed; speed = 0; syncTop(); } }   // 열려 있는 동안 정지
+  modalCur = m;
+  const dlg = $('modal').querySelector('.dlg');
+  dlg.className = `dlg ${m.tone}`;
+  dlg.innerHTML = `<h2>${m.title}</h2><div class="body">${m.body}</div><div class="btns">${m.buttons.map((b, i) => `<button data-i="${i}" class="${b.primary ? 'primary' : ''}${b.danger ? ' danger' : ''}">${b.label}</button>`).join('')}</div>`;
+  $('modal').classList.remove('hidden');
+  dlg.querySelector('button.primary, button.danger, button')?.focus();
+}
+function answerModal(i) {
+  const b = modalCur && modalCur.buttons[i];
+  if (!b) return;
+  if (b.onClick) b.onClick();
+  if (G) { G.dirty = true; panelDirty = true; processEvents(); }
+  nextModal();
+}
+$('modal').addEventListener('click', e => { const b = e.target.closest('button[data-i]'); if (b) answerModal(+b.dataset.i); });
+
+// 로그 이벤트를 화면 알림으로 바꾼다. 내게 중요한 일은 모달(자동 정지), 나머지는 토스트
+let lastEventId = 0;
+function processEvents() {
+  if (!G) return;
+  if (G.player < 0) { lastEventId = G.logSeq; return; }
+  for (const e of G.log) if (e.id > lastEventId) { lastEventId = e.id; presentEvent(e); }
+}
+function presentEvent(e) {
+  const me = G.player, inv = e.involved || [], N = i => G.countries[i].name;
+  const meIn = inv.includes(me), friendIn = inv.some(i => i !== me && isFriend(i));
+  const enemies = () => warsOf(G, me).map(i => esc(N(i))).join(', ') || '없음';
+  switch (e.kind) {
+    case 'war':
+      if (e.owner === me) return toast(`⚔ ${e.text}`, 'war', 7000);
+      if (inv[1] === me) return showModal({ tone: 'war', title: `⚠ ${esc(N(inv[0]))}의 선전포고`,
+        body: `${esc(e.text)}<ul><li>현재 교전 중: <b>${enemies()}</b></li></ul><div class="sub">전선을 편성해 접경에 사단을 배치하고, 생산 라인을 점검하세요. 개전 20일 후부터 강화를 제안할 수 있습니다.</div>` });
+      return toast(`⚔ ${e.text}`, meIn || friendIn ? 'war' : 'info', meIn || friendIn ? 7000 : 4500, !(meIn || friendIn));
+    case 'join':
+      if (inv[0] === me) return showModal({ tone: 'war', title: '🤝 동맹 참전',
+        body: `${esc(e.text)}<div class="sub">동맹국의 전쟁에 자동으로 참전했습니다. 현재 교전 중: <b>${enemies()}</b></div>` });
+      if (inv[1] === me) return showModal({ tone: 'war', title: '⚠ 새로운 적',
+        body: `${esc(e.text)}<div class="sub">현재 교전 중: <b>${enemies()}</b></div>` });
+      return toast(`🤝 ${e.text}`, friendIn ? 'war' : 'info', friendIn ? 6000 : 4000, !friendIn);
+    case 'peace': return toast(`🕊 ${e.text}`, meIn ? 'good' : 'info', meIn ? 7000 : 4500, !meIn);
+    case 'alliance': return toast(`🤝 ${e.text}`, meIn ? 'good' : 'info', meIn ? 6000 : 4500, !meIn);
+    case 'leave': return toast(e.text, 'info', 4500, !meIn);
+    case 'capital':
+      if (inv[1] === me) return showModal({ tone: 'war', title: '🏛 수도 함락!',
+        body: `${esc(e.text)}<div class="sub">수도가 <b>${esc(G.provs[G.countries[me].capital].name)}</b>(으)로 이전되었습니다. 수도를 잃으면 생산·사기에 큰 타격입니다. 수복하거나 강화를 모색하세요.</div>` });
+      return toast(`🏛 ${e.text}`, inv[0] === me ? 'good' : 'info', inv[0] === me ? 6500 : 4500, inv[0] !== me);
+    case 'fall': return inv[0] === me ? undefined : toast(`💀 ${e.text}`, 'warn', 6000);
+    case 'built': return toast(`🏭 ${e.text}`, 'good', 4500, true);
+    case 'front': return toast(e.text, 'info', 4500, true);
+  }
+}
+
+// 선전포고 전 확인: 참전하는 동맹을 미리 보여준다
+function confirmWar(other) {
+  const me = G.player, B = G.countries[other], { ours, theirs } = warParticipants(G, me, other);
+  const names = ids => ids.length ? ids.map(i => `<b>${esc(G.countries[i].name)}</b>`).join(', ') : '없음';
+  const left = (G.truces[warKey(me, other)] || 0) - G.day;
+  if (left > 0) return toast(`${B.name}와는 휴전 중입니다 (${left}일 남음). 휴전이 끝나야 선전포고할 수 있습니다.`, 'warn', 5000);
+  showModal({
+    tone: 'war', title: `⚔ ${esc(B.name)}에 선전포고`,
+    body: `정말 <b>${esc(B.name)}</b>와 전쟁을 시작하시겠습니까?<ul><li>우리 편으로 참전하는 동맹: ${names(ours)}</li><li>상대 편으로 참전하는 동맹: ${names(theirs)}</li></ul><div class="sub">전쟁이 시작되면 20일 동안은 강화를 제안할 수 없고, 끝난 뒤에도 40일간 다시 선전포고할 수 없습니다.</div>`,
+    buttons: [{ label: '선전포고', danger: true, onClick: () => { if (!declareWar(G, me, other)) toast('선전포고할 수 없습니다 (동맹국이거나 휴전 중)', 'warn'); } }, { label: '취소' }],
+  });
+}
+function confirmLeave() {
+  const me = G.countries[G.player], f = G.factions[me.faction];
+  showModal({
+    tone: 'warn', title: '동맹 탈퇴',
+    body: `<b>${esc(f ? f.name : '동맹')}</b>을(를) 탈퇴하시겠습니까?<div class="sub">동맹국의 자동 참전 지원과 시야 공유를 잃고, 동맹 승리 조건도 달성할 수 없게 됩니다.</div>`,
+    buttons: [{ label: '탈퇴', danger: true, onClick: () => leaveFaction(G, G.player) }, { label: '취소' }],
+  });
+}
+const resultToast = r => toast(r.msg, r.ok ? 'good' : 'warn', r.ok ? 5500 : 4500);
+
 function setSpeed(s) {
   if (phase !== 'play') return;
   speed = s; panelDirty = true; syncTop(); $('banner').style.display = 'none';
@@ -110,13 +212,13 @@ function selectOwnArmies() {
 }
 function orderMove(target) {
   const armies = G.armies.filter(a => selArmies.has(a.id));
-  if (!armies.length) { banner('먼저 사단이 있는 지역을 선택하세요', 1800); return; }
+  if (!armies.length) { toast('먼저 사단이 있는 지역을 선택하세요', 'warn'); return; }
   let moved = 0;
   for (const a of armies) {
     const p = findPath(G, a.prov, target, a.owner);
     if (p) { a.path = p; a.prog = 0; moved++; a.front = null; }
   }
-  if (!moved) banner('이동할 수 없는 지역입니다 (전쟁 중이 아닌 국가의 영토)', 2000);
+  if (!moved) toast('이동할 수 없는 지역입니다 (전쟁 중이 아닌 국가의 영토)', 'warn');
   G.dirty = true;
 }
 function handleTap(sx, sy) {
@@ -191,6 +293,11 @@ canvas.addEventListener('contextmenu', e => {
 });
 canvas.addEventListener('wheel', e => { e.preventDefault(); zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
 window.addEventListener('keydown', e => {
+  if (modalOpen) {   // 모달이 열려 있으면 Enter=기본 버튼, Esc=마지막(취소) 버튼
+    if (e.code === 'Escape') { e.preventDefault(); answerModal(modalCur.buttons.length - 1); }
+    else if (e.code === 'Enter' && !e.target.closest?.('button')) { e.preventDefault(); answerModal(Math.max(0, modalCur.buttons.findIndex(b => b.primary))); }
+    return;
+  }
   if (phase !== 'play' || e.target.tagName === 'INPUT') return;
   if (e.code === 'Space') { e.preventDefault(); setSpeed(speed ? 0 : 1); }
   else if (['Digit1', 'Digit2', 'Digit3'].includes(e.code)) setSpeed(+e.code.slice(-1));
@@ -219,14 +326,14 @@ $('panel').addEventListener('click', e => {
     case 'train': addTrainLine(G, G.player, b.dataset.type); break;
     case 'rmline': removeLine(G, G.player, +b.dataset.i); break;
     case 'alloc': setAlloc(G, G.player, b.dataset.eq, +b.dataset.d); break;
-    case 'build': { const r = queueBuild(G, G.player, selProv, b.dataset.kind); banner(r.msg, 2200); break; }
+    case 'build': resultToast(queueBuild(G, G.player, selProv, b.dataset.kind)); break;
     case 'cancelbuild': cancelBuild(G, G.player, +b.dataset.i); break;
-    case 'war': if (!declareWar(G, G.player, other)) banner('휴전 기간이거나 동맹국이라 선전포고할 수 없습니다', 2000); break;
-    case 'peace': banner(proposePeace(G, G.player, other, false).msg, 2500); break;
-    case 'demand': banner(proposePeace(G, G.player, other, true).msg, 3000); break;
-    case 'ally': banner(proposeAlliance(G, G.player, other).msg, 2500); break;
-    case 'leave': leaveFaction(G, G.player); break;
-    case 'fcreate': { const f = createFront(G, G.player, selProv, b.dataset.mode); if (f) { selFront = f.id; assignToFront(G, f, selArmies); } else banner('이 지역에는 전선을 만들 수 없습니다 (적 지배지와 맞닿은 내 지역)', 2200); break; }
+    case 'war': confirmWar(other); break;
+    case 'peace': resultToast(proposePeace(G, G.player, other, false)); break;
+    case 'demand': resultToast(proposePeace(G, G.player, other, true)); break;
+    case 'ally': resultToast(proposeAlliance(G, G.player, other)); break;
+    case 'leave': confirmLeave(); break;
+    case 'fcreate': { const f = createFront(G, G.player, selProv, b.dataset.mode); if (f) { selFront = f.id; assignToFront(G, f, selArmies); } else toast('이 지역에는 전선을 만들 수 없습니다 (적 지배지와 맞닿은 내 지역)', 'warn'); break; }
     case 'fselect': selFront = +b.dataset.id; break;
     case 'fmode': { const f = G.fronts.find(x => x.id === +b.dataset.id); if (f) f.mode = f.mode === 'attack' ? 'hold' : 'attack'; break; }
     case 'fassign': { const f = G.fronts.find(x => x.id === +b.dataset.id); if (f) assignToFront(G, f, selArmies); break; }
@@ -240,7 +347,7 @@ $('panel').addEventListener('click', e => {
       break;
     }
   }
-  G.dirty = true; panelDirty = true;
+  G.dirty = true; panelDirty = true; processEvents();
 });
 $('panel').addEventListener('change', e => {
   const id = +e.target.dataset.army; if (!id) return;
@@ -507,6 +614,7 @@ function frame(t) {
     acc += dt;
     while (acc >= DAY_MS[speed]) {
       acc -= DAY_MS[speed]; tickDay(G); G.dirty = true; panelDirty = true;
+      processEvents(); if (modalOpen) break;   // 중요한 알림이 뜨면 즉시 정지
       if (G.day % 30 === 0) saveGame(AUTO_KEY);
       if (G.over) break;
     }

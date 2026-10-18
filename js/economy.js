@@ -115,7 +115,7 @@ function economy(G) {
       if (p.civ + p.mil >= p.slots) return false;
       p[j.kind]++;
       if (j.kind === 'mil') c.alloc.small++;                          // 새 군수 공장은 보병장비에 우선 할당
-      if (c.id === G.player) addLog(G, `${p.name}에 ${j.kind === 'civ' ? '민수' : '군수'} 공장이 완공되었다.`, c.id);
+      if (c.id === G.player) addLog(G, `${p.name}에 ${j.kind === 'civ' ? '민수' : '군수'} 공장이 완공되었다.`, c.id, 'built', [c.id]);
       G.dirty = true;
       return false;
     });
@@ -141,7 +141,7 @@ function trainDivisions(G, c) {
     } else if (++q.progress >= TRAIN_DAYS[q.type]) {
       const home = G.provs[c.capital].controller === c.id ? c.capital : nearestControlled(G, c.capital, c.id);
       spawnArmy(G, c.id, home, q.type);
-      if (c.id === G.player) addLog(G, `새 ${u.name} 사단이 편성되었다.`, c.id);
+      if (c.id === G.player) addLog(G, `새 ${u.name} 사단이 편성되었다.`, c.id, 'unit', [c.id]);
       q.started = false; q.progress = 0;
     }
   }

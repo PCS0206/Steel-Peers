@@ -2,7 +2,7 @@
 const fs = require('fs'), vm = require('vm'), path = require('path');
 const EXPORTS = ['newGame', 'tickDay', 'serialize', 'deserialize', 'ownedCount', 'controlledCount', 'strength', 'declareWar', 'proposePeace',
   'proposeAlliance', 'formAlliance', 'findPath', 'visibleSet', 'splitArmy', 'mergeArmies', 'spawnArmy', 'enterable', 'moveDays',
-  'warScore', 'atWar', 'sameFaction', 'neighborsOf', 'UNITS', 'TERRAIN', 'generateMap', 'findProvince', 'createFront', 'assignToFront', 'frontBorder', 'dissolveFront', 'factoriesOf', 'queueBuild', 'cancelBuild', 'setAlloc', 'addTrainLine', 'removeLine', 'freeSlots', 'EQUIP', 'TRAIN_DAYS', 'FACTORY_COST'];
+  'warScore', 'atWar', 'sameFaction', 'neighborsOf', 'UNITS', 'TERRAIN', 'generateMap', 'findProvince', 'createFront', 'assignToFront', 'frontBorder', 'dissolveFront', 'factoriesOf', 'queueBuild', 'cancelBuild', 'setAlloc', 'addTrainLine', 'removeLine', 'freeSlots', 'warParticipants', 'EQUIP', 'TRAIN_DAYS', 'FACTORY_COST'];
 exports.loadGame = function () {
   const ctx = vm.createContext({ console, Math, JSON });
   const src = ['map', 'game', 'economy', 'fronts', 'ai'].map(f => fs.readFileSync(path.join(__dirname, '..', 'js', f + '.js'), 'utf8')).join('\n;\n')

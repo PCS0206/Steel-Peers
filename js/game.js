@@ -40,7 +40,7 @@ const warKey = (a, b) => (a < b ? a + '-' + b : b + '-' + a);
 function emptyState(seed, map) {
   return {
     seed, map, provs: map.provs, countries: [], armies: [], wars: {}, truces: {}, factions: [], nextFaction: 1, fronts: [], nextFront: 1,
-    day: 0, log: [], nextArmyId: 1, player: -1, over: null, dirty: true, landCount: 0, supply: [], vis: null,
+    day: 0, log: [], logSeq: 0, nextArmyId: 1, player: -1, over: null, dirty: true, landCount: 0, supply: [], vis: null,
     rnd: mulberry32(seed),
   };
 }
@@ -120,7 +120,11 @@ function splitArmy(G, a, type) {
 function setHp(a) { a.hp = Object.values(a.comp).reduce((s, v) => s + v, 0); }
 function scaleArmy(a, factor) { for (const t in a.comp) a.comp[t] *= factor; setHp(a); }
 
-function addLog(G, text, owner) { G.log.push({ day: G.day, text, owner }); if (G.log.length > 200) G.log.shift(); }
+// kind: war/join/peace/alliance/leave/capital/occupy/fall/built/unit/front/info, involved: 관련 국가 id들 (UI 알림 분류용)
+function addLog(G, text, owner, kind = 'info', involved = []) {
+  G.log.push({ id: ++G.logSeq, day: G.day, text, owner, kind, involved });
+  if (G.log.length > 200) G.log.shift();
+}
 function dateStr(day) { return new Date(Date.UTC(START_YEAR, 0, 1 + day)).toISOString().slice(0, 10); }
 
 const atWar = (G, a, b) => a !== b && a >= 0 && b >= 0 && G.wars[warKey(a, b)] !== undefined;
@@ -190,19 +194,27 @@ function visibleSet(G, id) {
 }
 
 // ---------- 외교 ----------
+// a가 b에게 선전포고하면 누가 참전하는가: ours = a 쪽 동맹, theirs = b 쪽 동맹 (b의 동맹이 a를 상대로 참전)
+function warParticipants(G, a, b) {
+  const joiners = (side, foe) => {
+    const f = G.countries[side].faction;
+    if (f < 0) return [];
+    return membersOf(G, f).filter(m => m.id !== side && m.id !== foe && !atWar(G, m.id, foe) && !sameFaction(G, m.id, foe)).map(m => m.id);
+  };
+  return { ours: joiners(a, b), theirs: joiners(b, a) };
+}
+
 function declareWar(G, a, b) {
   const k = warKey(a, b);
   if (G.wars[k] !== undefined || sameFaction(G, a, b) || (G.truces[k] || 0) > G.day) return false;
+  const { ours, theirs } = warParticipants(G, a, b);
   G.wars[k] = G.day;
-  addLog(G, `${josa(G.countries[a].name, '이/가')} ${G.countries[b].name}에 선전포고했다!`, a);
+  addLog(G, `${josa(G.countries[a].name, '이/가')} ${G.countries[b].name}에 선전포고했다!`, a, 'war', [a, b]);
   // 양측 동맹이 자동 참전
-  for (const [side, foe] of [[a, b], [b, a]]) {
-    const f = G.countries[side].faction;
-    if (f < 0) continue;
-    for (const m of membersOf(G, f)) {
-      if (m.id === side || m.id === foe || atWar(G, m.id, foe) || sameFaction(G, m.id, foe)) continue;
-      G.wars[warKey(m.id, foe)] = G.day;
-      addLog(G, `${josa(m.name, '이/가')} 동맹을 지키기 위해 ${G.countries[foe].name}와의 전쟁에 참전했다.`, m.id);
+  for (const [list, foe] of [[ours, b], [theirs, a]]) {
+    for (const id of list) {
+      G.wars[warKey(id, foe)] = G.day;
+      addLog(G, `${josa(G.countries[id].name, '이/가')} 동맹을 지키기 위해 ${G.countries[foe].name}와의 전쟁에 참전했다.`, id, 'join', [id, foe]);
     }
   }
   return true;
@@ -216,9 +228,9 @@ function makePeace(G, a, b, winner = -1) {
     let n = 0;
     for (const p of G.provs) if (p.owner === loser && p.controller === winner) { p.owner = winner; n++; }
     G.dirty = true;
-    addLog(G, `${josa(G.countries[winner].name, '이/가')} ${G.countries[loser].name}에게서 ${n}개 지역을 할양받고 강화했다.`, winner);
+    addLog(G, `${josa(G.countries[winner].name, '이/가')} ${G.countries[loser].name}에게서 ${n}개 지역을 할양받고 강화했다.`, winner, 'peace', [winner, loser]);
   } else {
-    addLog(G, `${josa(G.countries[a].name, '과/와')} ${josa(G.countries[b].name, '이/가')} 강화했다.`, a);
+    addLog(G, `${josa(G.countries[a].name, '과/와')} ${josa(G.countries[b].name, '이/가')} 강화했다.`, a, 'peace', [a, b]);
   }
   // 갈 수 없게 된 지역에 있는 부대는 가까운 아군 지역으로 복귀
   for (const arm of G.armies) {
@@ -275,7 +287,7 @@ function formAlliance(G, a, b) {
   let f = A.faction >= 0 ? A.faction : B.faction;
   if (f < 0) { f = G.nextFaction++; G.factions[f] = { id: f, name: `${A.name} 동맹` }; A.faction = f; }
   A.faction = B.faction = f;
-  addLog(G, `${josa(A.name, '과/와')} ${josa(B.name, '이/가')} 동맹을 맺었다.`, a);
+  addLog(G, `${josa(A.name, '과/와')} ${josa(B.name, '이/가')} 동맹을 맺었다.`, a, 'alliance', [a, b]);
   return true;
 }
 
@@ -283,7 +295,7 @@ function leaveFaction(G, id) {
   const c = G.countries[id], f = c.faction;
   if (f < 0) return;
   c.faction = -1;
-  addLog(G, `${josa(c.name, '이/가')} 동맹을 탈퇴했다.`, id);
+  addLog(G, `${josa(c.name, '이/가')} 동맹을 탈퇴했다.`, id, 'leave', [id]);
   if (membersOf(G, f).length < 2) membersOf(G, f).forEach(m => { m.faction = -1; });
 }
 
@@ -395,11 +407,11 @@ function occupy(G, p, who) {
   if (old < 0) { p.owner = who; return; }
   const oc = G.countries[old];
   if (p.owner === old && p.id === oc.capital) {
-    addLog(G, `${josa(G.countries[who].name, '이/가')} ${oc.name}의 수도 ${josa(p.name, '을/를')} 점령했다!`, who);
+    addLog(G, `${josa(G.countries[who].name, '이/가')} ${oc.name}의 수도 ${josa(p.name, '을/를')} 점령했다!`, who, 'capital', [who, old]);
     const rest = G.provs.filter(q => q.land && q.controller === old).sort((a, b) => (b.civ + b.mil) - (a.civ + a.mil))[0];
     if (rest) oc.capital = rest.id;
   } else if (who === G.player || old === G.player || p.owner === G.player) {
-    addLog(G, `${p.name}: ${G.countries[who].name}, ${G.countries[old].name}에게서 점령`, who);
+    addLog(G, `${p.name}: ${G.countries[who].name}, ${G.countries[old].name}에게서 점령`, who, 'occupy', [who, old]);
   }
 }
 
@@ -411,7 +423,7 @@ function capitulate(G, id) {
   G.armies = G.armies.filter(a => a.owner !== id);
   for (const k of Object.keys(G.wars)) if (k.split('-').map(Number).includes(id)) delete G.wars[k];
   G.dirty = true;
-  addLog(G, `${josa(c.name, '이/가')} 항복했다.`, id);
+  addLog(G, `${josa(c.name, '이/가')} 항복했다.`, id, 'fall', [id]);
 }
 
 // 보급 끊김은 조직도와 병력을 깎고, 보급되는 휴식 부대는 조직도를 회복
@@ -439,7 +451,7 @@ function serialize(G) {
   return JSON.parse(JSON.stringify({
     v: SAVE_VERSION, seed: G.seed, nCountries: G.nCountries, day: G.day, player: G.player, nextArmyId: G.nextArmyId,
     countries: G.countries, armies: G.armies, wars: G.wars, truces: G.truces, factions: G.factions, nextFaction: G.nextFaction, fronts: G.fronts, nextFront: G.nextFront,
-    log: G.log.slice(-60), over: G.over, landCount: G.landCount, provs: G.provs.map(p => [p.owner, p.controller, p.industry, p.civ, p.mil]),
+    log: G.log.slice(-60), logSeq: G.logSeq, over: G.over, landCount: G.landCount, provs: G.provs.map(p => [p.owner, p.controller, p.industry, p.civ, p.mil]),
   }));
 }
 
@@ -448,7 +460,7 @@ function deserialize(d) {
   const G = emptyState(d.seed, generateMap(d.seed));
   Object.assign(G, {
     nCountries: d.nCountries, day: d.day, player: d.player, nextArmyId: d.nextArmyId, countries: d.countries, armies: d.armies,
-    wars: d.wars, truces: d.truces, factions: d.factions, nextFaction: d.nextFaction, fronts: d.fronts || [], nextFront: d.nextFront || 1, log: d.log, over: d.over, landCount: d.landCount,
+    wars: d.wars, truces: d.truces, factions: d.factions, nextFaction: d.nextFaction, fronts: d.fronts || [], nextFront: d.nextFront || 1, log: d.log, logSeq: d.logSeq || 0, over: d.over, landCount: d.landCount,
   });
   d.provs.forEach(([owner, controller, industry, civ, mil], i) => Object.assign(G.provs[i], { owner, controller, industry, civ, mil, slots: industry + SLOT_BONUS }));
   computeSupply(G);

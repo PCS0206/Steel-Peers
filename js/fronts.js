@@ -17,14 +17,14 @@ function createFront(G, owner, seed, mode = 'attack') {
   const f = { id: G.nextFront++, owner, enemy, seed, mode, auto: false, name: `${G.countries[enemy].name} 전선`, border: [] };
   G.fronts.push(f);
   f.border = frontBorder(G, f);
-  addLog(G, `${f.name}을 편성했다 (${mode === 'attack' ? '공격' : '방어'}).`, owner);
+  addLog(G, `${f.name}을 편성했다 (${mode === 'attack' ? '공격' : '방어'}).`, owner, 'front', [owner]);
   return f;
 }
 
 function dissolveFront(G, f, why) {
   G.fronts = G.fronts.filter(x => x !== f);
   for (const a of G.armies) if (a.front === f.id) a.front = null;
-  if (why) addLog(G, `${f.name}: ${why}`, f.owner);
+  if (why) addLog(G, `${f.name}: ${why}`, f.owner, 'front', [f.owner]);
 }
 
 // 적(f.enemy) 지배지와 맞닿은 내 지배지 중, 시드에서 이어지는 한 덩어리
